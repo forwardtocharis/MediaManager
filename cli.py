@@ -16,6 +16,7 @@ Usage:
   python cli.py duplicates
 """
 
+import json
 import logging
 import sys
 from pathlib import Path
@@ -434,7 +435,6 @@ def duplicates(ctx):
     cfg = _load_config(ctx.obj["config_path"])
     _setup(cfg)
 
-    import json as _json
     from src import db
 
     dups = db.get_pending_duplicates()
@@ -443,7 +443,7 @@ def duplicates(ctx):
         return
 
     for dup in dups:
-        media_ids = _json.loads(dup["media_ids"])
+        media_ids = json.loads(dup["media_ids"])
         console.print(f"\n[bold]Duplicate group — TMDB ID: {dup['tmdb_id']}[/bold]")
 
         table = Table(box=box.SIMPLE)

@@ -768,6 +768,20 @@ def api_verify():
             phase_nums
         ).fetchall()
 
+    # Preload all subtitles for the matched media files in one query
+    subtitles_by_media_id: dict = {}
+    if rows:
+        media_ids = [r["id"] for r in rows]
+        sub_placeholders = ",".join("?" * len(media_ids))
+        with _db.connect() as conn_subs:
+            all_subs = conn_subs.execute(
+                f"SELECT * FROM subtitle_files WHERE parent_media_id IN ({sub_placeholders})",
+                media_ids
+            ).fetchall()
+        for sub in all_subs:
+            mid = sub["parent_media_id"]
+            subtitles_by_media_id.setdefault(mid, []).append(sub)
+
     files = []
     summary = {"total": 0, "movies": 0, "tv_episodes": 0,
                "path_changed": 0, "filename_changed": 0, "metadata_only": 0}
@@ -781,8 +795,7 @@ def api_verify():
                 pass
 
             # ── BEFORE (what exists on disk now) ──────────────────────────
-            from pathlib import Path as _Path
-            orig = _Path(row["original_path"])
+            orig = Path(row["original_path"])
             before = {
                 "path":     row["original_path"],
                 "folder":   str(orig.parent),
@@ -830,20 +843,15 @@ def api_verify():
             # ── Subtitle changes ──────────────────────────────────────────
             subtitle_changes = []
             try:
-                with _db.connect() as conn2:
-                    subs = conn2.execute(
-                        "SELECT * FROM subtitle_files WHERE parent_media_id=?",
-                        (row["id"],)
-                    ).fetchall()
                 from src.utils.file_utils import build_subtitle_path
-                for sub in subs:
+                for sub in subtitles_by_media_id.get(row["id"], []):
                     sub_dst = build_subtitle_path(
-                        _Path(proposed["proposed_path"]),
+                        Path(proposed["proposed_path"]),
                         sub["language"], sub["extension"]
                     )
                     subtitle_changes.append({
                         "before": sub["original_path"],
-                        "before_filename": _Path(sub["original_path"]).name,
+                        "before_filename": Path(sub["original_path"]).name,
                         "after":  str(sub_dst),
                         "after_filename": sub_dst.name,
                     })

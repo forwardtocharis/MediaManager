@@ -16,7 +16,7 @@ from src import db
 logger = logging.getLogger(__name__)
 
 _API_NAME = "omdb"
-_BASE_URL = "http://www.omdbapi.com/"
+_BASE_URL = "https://www.omdbapi.com/"
 
 
 class OMDBClient:

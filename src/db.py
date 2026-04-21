@@ -4,6 +4,7 @@ db.py — SQLite database layer for MediaManager.
 Handles schema creation, connection management, and all CRUD helpers.
 """
 
+import datetime
 import sqlite3
 import json
 from pathlib import Path
@@ -370,7 +371,7 @@ def get_rate_limit(api: str) -> Optional[sqlite3.Row]:
 
 def increment_request_count(api: str) -> int:
     """Increment counter, reset if new day. Returns new count."""
-    today = __import__("datetime").date.today().isoformat()
+    today = datetime.date.today().isoformat()
     with connect() as conn:
         row = conn.execute(
             "SELECT requests_today, reset_date FROM rate_limit_state WHERE api=?",
