@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}MediaManager{% endblock %}</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+</head>
+<body>
+<div class="app-shell">
+
+  <!-- Header -->
+  <header class="header">
+    <div class="header-logo">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+      </svg>
+      <span class="logo-text">MediaManager</span>
+    </div>
+    <div class="header-title">{% block header_title %}Dashboard{% endblock %}</div>
+    <div class="header-actions">
+      <div class="api-pill" id="tmdb-pill" onclick="App.toggleApi('tmdb')" title="TMDB API">
+        <span class="dot off" id="tmdb-dot"></span>
+        <span>TMDB</span>
+        <span id="tmdb-count" class="text-muted text-small">—</span>
+      </div>
+      <div class="api-pill" id="omdb-pill" onclick="App.toggleApi('omdb')" title="OMDB API">
+        <span class="dot off" id="omdb-dot"></span>
+        <span>OMDB</span>
+        <span id="omdb-count" class="text-muted text-small">—</span>
+      </div>
+      <div class="api-pill" id="llm-pill" style="cursor:default" title="LLM Provider">
+        <span class="dot off" id="llm-dot"></span>
+        <span id="llm-label">LLM</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Sidebar -->
+  <nav class="sidebar">
+    <span class="nav-section-label">Navigation</span>
+    <a href="/" class="nav-item {% if request.path == '/' %}active{% endif %}">
+      <i data-lucide="layout-dashboard"></i> Dashboard
+    </a>
+    <a href="/library" class="nav-item {% if request.path == '/library' %}active{% endif %}">
+      <i data-lucide="library"></i> Library
+      <span class="nav-badge" id="sidebar-needs-review" style="display:none"></span>
+    </a>
+    <a href="/pipeline" class="nav-item {% if request.path == '/pipeline' %}active{% endif %}">
+      <i data-lucide="workflow"></i> Pipeline
+    </a>
+    <a href="/duplicates" class="nav-item {% if request.path == '/duplicates' %}active{% endif %}">
+      <i data-lucide="copy"></i> Duplicates
+      <span class="nav-badge" id="sidebar-dups" style="display:none"></span>
+    </a>
+    <a href="/verify" class="nav-item {% if request.path == '/verify' %}active{% endif %}">
+      <i data-lucide="eye"></i> Verify & Apply
+    </a>
+
+    <span class="nav-section-label">System</span>
+    <a href="/settings" class="nav-item {% if request.path == '/settings' %}active{% endif %}">
+      <i data-lucide="settings"></i> Settings
+    </a>
+
+    <div class="sidebar-footer">
+      <div class="llm-status">
+        <div class="llm-status-label">LLM Provider</div>
+        <div class="llm-status-value" id="sidebar-llm-name">Not configured</div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Main content -->
+  <main class="main" id="main-content">
+    {% block content %}{% endblock %}
+  </main>
+
+</div>
+
+<!-- Toast container -->
+<div id="toast-container"></div>
+
+<!-- Side panel (shared, populated by JS) -->
+<div class="side-panel-overlay" id="panel-overlay" onclick="App.closePanel()"></div>
+<div class="side-panel" id="side-panel">
+  <div class="panel-header">
+    <span class="panel-title" id="panel-title">Edit File</span>
+    <button class="btn btn-ghost btn-sm" onclick="App.closePanel()">
+      <i data-lucide="x"></i>
+    </button>
+  </div>
+  <div class="panel-body" id="panel-body"></div>
+  <div class="panel-footer" id="panel-footer"></div>
+</div>
+
+<!-- Path picker modal -->
+<div class="modal-overlay" id="path-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title">Browse Folder</span>
+      <button class="btn btn-ghost btn-sm" onclick="App.closePathModal()"><i data-lucide="x"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="path-breadcrumb" id="path-breadcrumb"></div>
+      <div id="path-entries"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="App.closePathModal()">Cancel</button>
+      <button class="btn btn-primary" id="path-select-btn">Select This Folder</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/main.js"></script>
+<script>
+  lucide.createIcons();
+  App.init();
+</script>
+</body>
+</html>

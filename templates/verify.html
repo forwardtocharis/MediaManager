@@ -1,0 +1,835 @@
+{% extends "base.html" %}
+{% block title %}Verify Changes — MediaManager{% endblock %}
+{% block header_title %}Verify Changes{% endblock %}
+
+{% block content %}
+<style>
+/* ── Verify page specific styles ──────────────────────────────────────── */
+.verify-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  box-shadow: 0 4px 24px rgba(0,0,0,.4);
+}
+
+.verify-toolbar-left  { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.verify-toolbar-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+.check-all-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  color: var(--text-2);
+  transition: color var(--transition);
+}
+
+.check-all-label:hover { color: var(--text); }
+
+.selected-count {
+  font-size: 13px;
+  color: var(--text-3);
+  font-weight: 500;
+}
+
+.filter-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+
+.chip {
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-2);
+  transition: var(--transition);
+}
+
+.chip:hover { border-color: var(--border-2); color: var(--text); }
+.chip.active { background: rgba(124,58,237,.15); border-color: var(--accent); color: var(--accent-l); }
+
+/* ── Summary cards ────────────────────────────────────────────────────── */
+.verify-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.vsummary-card {
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.vsummary-num   { font-size: 22px; font-weight: 700; letter-spacing: -1px; }
+.vsummary-label { font-size: 11px; color: var(--text-3); font-weight: 500; }
+
+/* ── File items ───────────────────────────────────────────────────────── */
+.verify-list { display: flex; flex-direction: column; gap: 6px; }
+
+.verify-item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  transition: border-color var(--transition);
+}
+
+.verify-item:hover { border-color: var(--border-2); }
+.verify-item.unchecked { opacity: .45; }
+.verify-item.expanded { border-color: var(--accent); }
+
+/* ── Collapsed header row ─────────────────────────────────────────────── */
+.verify-row {
+  display: grid;
+  grid-template-columns: 40px 1fr auto auto 28px;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 16px;
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--transition);
+}
+
+.verify-row:hover { background: var(--surface-2); }
+
+.verify-check { display: flex; justify-content: center; }
+.verify-check input { cursor: pointer; }
+
+.verify-filenames {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.v-before-name {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11.5px;
+  color: var(--text-4);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 240px;
+  flex-shrink: 1;
+}
+
+.v-arrow {
+  color: var(--text-4);
+  flex-shrink: 0;
+  font-size: 13px;
+}
+
+.v-after-name {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--green);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 280px;
+  flex-shrink: 1;
+}
+
+.v-after-name.unchanged { color: var(--text-2); }
+
+.verify-badges { display: flex; gap: 5px; align-items: center; flex-shrink: 0; }
+
+.v-chevron {
+  color: var(--text-4);
+  transition: transform var(--transition);
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.verify-item.expanded .v-chevron { transform: rotate(90deg); color: var(--accent-l); }
+
+/* ── Expanded details ─────────────────────────────────────────────────── */
+.verify-details {
+  border-top: 1px solid var(--border);
+  display: none;
+  flex-direction: column;
+  gap: 0;
+}
+
+.verify-item.expanded .verify-details { display: flex; }
+
+.ba-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-bottom: 1px solid var(--border);
+}
+
+.ba-col {
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.ba-col:first-child { border-right: 1px solid var(--border); }
+
+.ba-col-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .6px;
+}
+
+.ba-before-hdr { color: var(--text-4); }
+.ba-after-hdr  { color: var(--text-2); }
+
+.ba-row {
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid rgba(255,255,255,.03);
+  font-size: 12.5px;
+  align-items: flex-start;
+}
+
+.ba-row:last-child { border-bottom: none; }
+
+.ba-field {
+  color: var(--text-4);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .3px;
+  padding-top: 1px;
+  flex-shrink: 0;
+}
+
+.ba-val {
+  color: var(--text-2);
+  word-break: break-all;
+  font-size: 12.5px;
+}
+
+.ba-val.mono { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; }
+.ba-val.empty { color: var(--text-4); font-style: italic; }
+.ba-val.new   { color: var(--green); }
+.ba-val.changed { color: var(--cyan); }
+.ba-val.path-val { color: var(--text-2); font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+.ba-val.fname-val { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; }
+.ba-val.fname-changed { color: var(--green) !important; }
+
+/* highlighted changed field in "after" column */
+.ba-row.changed-row .ba-val { color: var(--green); }
+.ba-row.changed-row { background: rgba(52,211,153,.04); border-radius: 3px; }
+
+/* plot text */
+.ba-val.plot-text {
+  color: var(--text-3);
+  line-height: 1.5;
+  font-style: italic;
+  word-break: break-word;
+  white-space: normal;
+}
+
+/* ── Sidecar / subtitle section ───────────────────────────────────────── */
+.verify-sidecars {
+  padding: 14px 20px;
+  background: rgba(124,58,237,.04);
+  border-top: 1px solid rgba(124,58,237,.12);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sidecar-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  color: var(--accent-l);
+  margin-bottom: 4px;
+}
+
+.sidecar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.sidecar-icon { font-size: 13px; }
+.sidecar-path { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-3); }
+.sidecar-path.new { color: var(--accent-l); }
+.sidecar-sub-before { color: var(--text-4); font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+.sidecar-sub-arrow  { color: var(--text-4); }
+.sidecar-sub-after  { color: var(--cyan); font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+
+/* ── Progress overlay ─────────────────────────────────────────────────── */
+.apply-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.6);
+  backdrop-filter: blur(4px);
+  z-index: 400;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .25s;
+}
+
+.apply-overlay.open { opacity: 1; pointer-events: all; }
+
+.apply-modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  width: 520px;
+  max-width: 90vw;
+  padding: 28px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.apply-modal-title { font-size: 17px; font-weight: 700; }
+</style>
+
+<div class="page-header" style="margin-bottom:16px">
+  <div>
+    <div class="page-title">Verify Changes</div>
+    <div class="page-sub">Review every before/after change before writing to your NAS</div>
+  </div>
+  <div class="page-actions">
+    <a href="/pipeline" class="btn btn-secondary">
+      <i data-lucide="arrow-left"></i> Back to Pipeline
+    </a>
+    <button class="btn btn-secondary" onclick="Verify.reload()">
+      <i data-lucide="refresh-cw"></i> Reload
+    </button>
+  </div>
+</div>
+
+<!-- Sticky toolbar -->
+<div class="verify-toolbar" id="verify-toolbar">
+  <div class="verify-toolbar-left">
+    <label class="check-all-label" for="chk-all">
+      <input type="checkbox" id="chk-all" class="checkbox" onchange="Verify.toggleAll(this)">
+      <span id="chk-all-label">Check All</span>
+    </label>
+    <span class="selected-count" id="selected-count">Loading…</span>
+
+    <div class="filter-chips">
+      <span class="chip active" data-filter="all"     onclick="Verify.setFilter('all')">All</span>
+      <span class="chip"        data-filter="movie"   onclick="Verify.setFilter('movie')">Movies</span>
+      <span class="chip"        data-filter="tv"      onclick="Verify.setFilter('tv')">TV</span>
+      <span class="chip"        data-filter="moved"   onclick="Verify.setFilter('moved')">Path changes</span>
+      <span class="chip"        data-filter="renamed" onclick="Verify.setFilter('renamed')">Renamed</span>
+      <span class="chip"        data-filter="meta"    onclick="Verify.setFilter('meta')">Metadata only</span>
+    </div>
+  </div>
+
+  <div class="verify-toolbar-right">
+    <button class="btn btn-secondary" id="btn-dryrun" onclick="Verify.run(true)">
+      <i data-lucide="eye"></i> Dry Run
+    </button>
+    <button class="btn btn-primary" id="btn-apply" onclick="Verify.confirmApply()">
+      <i data-lucide="folder-sync"></i> Apply Selected
+    </button>
+  </div>
+</div>
+
+<!-- Summary row -->
+<div class="verify-summary" id="verify-summary"></div>
+
+<!-- File list -->
+<div id="verify-list">
+  <div class="empty-state">
+    <i data-lucide="loader-2" style="width:36px;height:36px;animation:spin 1s linear infinite"></i>
+    <p>Computing changes…</p>
+  </div>
+</div>
+
+<!-- Confirm apply modal -->
+<div class="modal-overlay" id="apply-confirm-modal">
+  <div class="modal" style="width:440px">
+    <div class="modal-header">
+      <span class="modal-title" style="color:var(--red)">Confirm Apply</span>
+      <button class="btn btn-ghost btn-sm" onclick="Verify.closeConfirm()"><i data-lucide="x"></i></button>
+    </div>
+    <div class="modal-body" style="font-size:13px;color:var(--text-2);line-height:1.7">
+      <p>This will <strong style="color:var(--text)">rename and move</strong>
+         <strong id="confirm-count" style="color:var(--accent-l)">—</strong> selected files on your NAS.</p>
+      <p style="margin-top:10px">Files are copied, verified, then the original is deleted. A manifest is kept for rollback.</p>
+      <p style="margin-top:10px;color:var(--yellow);font-size:12px">
+        <i data-lucide="alert-triangle" style="width:13px;vertical-align:middle"></i>
+        Always run Dry Run first to preview what will happen.
+      </p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="Verify.closeConfirm()">Cancel</button>
+      <button class="btn btn-danger" onclick="Verify.run(false); Verify.closeConfirm()">
+        <i data-lucide="folder-sync"></i> Apply for Real
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Apply progress overlay -->
+<div class="apply-overlay" id="apply-overlay">
+  <div class="apply-modal">
+    <div class="apply-modal-title" id="apply-overlay-title">Applying…</div>
+    <div class="progress-section">
+      <div class="progress-bar-wrap">
+        <div class="progress-track" style="height:8px">
+          <div class="progress-fill" id="apply-prog-bar" style="width:0%"></div>
+        </div>
+        <div class="progress-meta" style="margin-top:8px">
+          <span id="apply-prog-file" class="text-muted text-small"></span>
+          <span id="apply-prog-count" class="text-muted text-small"></span>
+        </div>
+      </div>
+      <div class="log-output" id="apply-prog-log" style="max-height:160px"></div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px" id="apply-overlay-footer" style="display:none">
+      <button class="btn btn-secondary" id="apply-close-btn" style="display:none"
+              onclick="Verify.closeApplyOverlay()">Close</button>
+    </div>
+  </div>
+</div>
+
+<style>@keyframes spin { from{transform:rotate(0)} to{transform:rotate(360deg)} }</style>
+
+<script>
+const Verify = {
+  all: [],         // all file entries from API
+  filtered: [],    // currently visible (after filter)
+  selected: new Set(),   // IDs of checked items
+  filter: 'all',
+
+  async load() {
+    document.getElementById('verify-list').innerHTML =
+      `<div class="empty-state">
+        <i data-lucide="loader-2" style="width:36px;height:36px;animation:spin 1s linear infinite"></i>
+        <p>Computing before/after for all identified files…</p>
+       </div>`;
+    lucide.createIcons();
+
+    const data = await App.api.get('/api/verify');
+    Verify.all = data.files || [];
+    // Default: all selected
+    Verify.selected = new Set(Verify.all.map(f => f.id));
+    Verify.renderSummary(data.summary || {});
+    Verify.applyFilter();
+  },
+
+  reload() { Verify.load(); },
+
+  renderSummary(s) {
+    document.getElementById('verify-summary').innerHTML = `
+      <div class="vsummary-card">
+        <div class="vsummary-num" style="color:var(--text)">${s.total||0}</div>
+        <div class="vsummary-label">Total Files</div>
+      </div>
+      <div class="vsummary-card">
+        <div class="vsummary-num" style="color:var(--blue)">${s.movies||0}</div>
+        <div class="vsummary-label">Movies</div>
+      </div>
+      <div class="vsummary-card">
+        <div class="vsummary-num" style="color:var(--cyan)">${s.tv_episodes||0}</div>
+        <div class="vsummary-label">TV Episodes</div>
+      </div>
+      <div class="vsummary-card">
+        <div class="vsummary-num" style="color:var(--green)">${s.path_changed||0}</div>
+        <div class="vsummary-label">Path Changes</div>
+      </div>
+      <div class="vsummary-card">
+        <div class="vsummary-num" style="color:var(--accent-l)">${s.metadata_only||0}</div>
+        <div class="vsummary-label">Metadata Only</div>
+      </div>`;
+  },
+
+  setFilter(f) {
+    Verify.filter = f;
+    document.querySelectorAll('.chip').forEach(el => {
+      el.classList.toggle('active', el.dataset.filter === f);
+    });
+    Verify.applyFilter();
+  },
+
+  applyFilter() {
+    const f = Verify.filter;
+    Verify.filtered = Verify.all.filter(file => {
+      if (f === 'movie')   return (file.after.type||'') === 'movie';
+      if (f === 'tv')      return (file.after.type||'') === 'tv';
+      if (f === 'moved')   return file.changes.path_changed;
+      if (f === 'renamed') return file.changes.filename_changed && !file.changes.path_changed;
+      if (f === 'meta')    return !file.changes.path_changed && !file.changes.filename_changed;
+      return true;
+    });
+    Verify.render();
+  },
+
+  render() {
+    const el = document.getElementById('verify-list');
+    if (!Verify.filtered.length) {
+      el.innerHTML = `<div class="empty-state">
+        <i data-lucide="film" style="width:40px;height:40px"></i>
+        <h3>No files match this filter</h3>
+        <p>${Verify.all.length ? 'Try a different filter above.' : 'No identified files ready to apply. Run identification first.'}</p>
+      </div>`;
+      lucide.createIcons();
+      Verify.updateToolbar();
+      return;
+    }
+
+    el.innerHTML = Verify.filtered.map(f => Verify.buildItem(f)).join('');
+    lucide.createIcons();
+    Verify.updateToolbar();
+  },
+
+  buildItem(f) {
+    const sel = Verify.selected.has(f.id);
+    const fnChanged = f.changes.filename_changed;
+    const phaseColors = {1:'var(--green)',2:'var(--accent-l)',3:'var(--cyan)'};
+    const pcolor = phaseColors[f.phase] || 'var(--text-3)';
+
+    return `
+      <div class="verify-item ${sel?'':'unchecked'}" id="vi-${f.id}">
+        <div class="verify-row" onclick="Verify.toggleExpand(${f.id}, event)">
+
+          <div class="verify-check" onclick="event.stopPropagation()">
+            <input type="checkbox" class="checkbox vi-chk" data-id="${f.id}"
+                   ${sel ? 'checked' : ''}
+                   onchange="Verify.toggleSelect(${f.id}, this.checked)">
+          </div>
+
+          <div class="verify-filenames">
+            <span class="v-before-name" title="${f.before.path}">${f.before.filename}</span>
+            <span class="v-arrow">→</span>
+            <span class="v-after-name ${fnChanged?'':'unchanged'}" title="${f.after.path}">${f.after.filename}</span>
+          </div>
+
+          <div class="verify-badges">
+            ${f.after.type ? `<span class="badge badge-${f.after.type}">${f.after.type.toUpperCase()}</span>` : ''}
+            <span class="badge" style="background:rgba(0,0,0,.2);color:${pcolor};border:1px solid ${pcolor}33">P${f.phase}</span>
+            ${f.changes.path_changed
+              ? '<span class="badge" style="background:rgba(52,211,153,.1);color:var(--green)">MOVED</span>'
+              : f.changes.filename_changed
+                ? '<span class="badge" style="background:rgba(34,211,238,.1);color:var(--cyan)">RENAMED</span>'
+                : '<span class="badge" style="background:rgba(124,58,237,.1);color:var(--accent-l)">META</span>'}
+            ${f.changes.subtitles_count ? `<span class="badge badge-pending">${f.changes.subtitles_count} sub${f.changes.subtitles_count>1?'s':''}</span>` : ''}
+          </div>
+
+          <div style="font-size:11px;color:var(--text-4);flex-shrink:0;min-width:30px;text-align:right">
+            ${f.confidence ? Math.round(f.confidence)+'%' : ''}
+          </div>
+
+          <div class="v-chevron">›</div>
+        </div>
+
+        <div class="verify-details" id="vd-${f.id}">
+          ${Verify.buildDetails(f)}
+        </div>
+      </div>`;
+  },
+
+  buildDetails(f) {
+    const b = f.before;
+    const a = f.after;
+    const c = f.changes;
+
+    const row = (label, bVal, aVal, changed = false, cls = '') => {
+      const bDisplay = (bVal != null && bVal !== '') ? bVal : `<span class="empty">—</span>`;
+      const aDisplay = (aVal != null && aVal !== '') ? aVal : `<span class="empty">—</span>`;
+      return `
+        <div class="ba-row ${changed ? 'changed-row' : ''}">
+          <span class="ba-field">${label}</span>
+          <span class="ba-val ${cls}">${bDisplay}</span>
+        </div>
+        <div class="ba-row ${changed ? 'changed-row' : ''}">
+          <span class="ba-field">${label}</span>
+          <span class="ba-val ${cls} ${changed?'fname-changed':''}">${aDisplay}</span>
+        </div>`;
+    };
+
+    // Build before + after columns separately for the 2-col layout
+    const fieldRows = (side) => {
+      const isBefore = side === 'before';
+      const d = isBefore ? b : a;
+      const out = [];
+
+      const field = (label, bv, av, changed = false, cls = '') => {
+        const val  = isBefore ? bv : av;
+        const disp = (val != null && val !== '') ? val : null;
+        const rowCls = changed ? 'changed-row' : '';
+        const valCls = [
+          'ba-val',
+          cls,
+          !disp ? 'empty' : '',
+          changed && !isBefore ? 'fname-changed' : '',
+        ].filter(Boolean).join(' ');
+        out.push(`
+          <div class="ba-row ${rowCls}">
+            <span class="ba-field">${label}</span>
+            <span class="${valCls}">${disp !== null ? disp : '—'}</span>
+          </div>`);
+      };
+
+      field('Folder', b.folder, a.folder, b.folder !== a.folder, 'path-val');
+      field('Filename', b.filename, a.filename, c.filename_changed, 'fname-val');
+      field('Title', b.title, a.title, c.title_changed);
+      field('Year',  b.year,  a.year,  c.year_changed);
+      field('Type',  b.type,  a.type,  c.type_changed);
+
+      if (!isBefore || b.season) field('Season', b.season, a.season, false);
+      if (!isBefore || b.episode) field('Episode', b.episode, a.episode, false);
+      if (!isBefore && a.episode_title) field('Ep. Title', b.episode_title, a.episode_title, false);
+
+      if (!isBefore || b.file_size_mb) {
+        field('Size', b.file_size_mb ? b.file_size_mb+' MB' : null,
+                       a.file_size_mb ? a.file_size_mb+' MB' : null);
+      }
+
+      // After-only metadata fields
+      if (!isBefore) {
+        if (a.tmdb_id) out.push(`<div class="ba-row changed-row"><span class="ba-field">TMDB ID</span><span class="ba-val new">${a.tmdb_id}</span></div>`);
+        if (a.imdb_id) out.push(`<div class="ba-row changed-row"><span class="ba-field">IMDb ID</span><span class="ba-val new">${a.imdb_id}</span></div>`);
+        if (a.rating)  out.push(`<div class="ba-row changed-row"><span class="ba-field">Rating</span><span class="ba-val new">${a.rating}/10</span></div>`);
+        if (a.director) out.push(`<div class="ba-row changed-row"><span class="ba-field">Director</span><span class="ba-val new">${a.director}</span></div>`);
+        if (a.genres?.length) out.push(`<div class="ba-row changed-row"><span class="ba-field">Genres</span><span class="ba-val new">${a.genres.join(', ')}</span></div>`);
+        if (a.plot) out.push(`<div class="ba-row changed-row"><span class="ba-field">Plot</span><span class="ba-val new plot-text">${a.plot.substring(0,200)}${a.plot.length>200?'…':''}</span></div>`);
+      } else {
+        // placeholder empty rows to keep lines aligned w/ after column
+        const afterExtras = [a.tmdb_id, a.imdb_id, a.rating, a.director, a.genres?.length, a.plot].filter(Boolean).length;
+        for (let i = 0; i < afterExtras; i++) {
+          out.push(`<div class="ba-row"><span class="ba-field"></span><span class="ba-val empty">—</span></div>`);
+        }
+      }
+
+      return out.join('');
+    };
+
+    // Sidecars section
+    const sidecars = [];
+    sidecars.push(`<div class="sidecar-row">
+      <span class="sidecar-icon">📄</span>
+      <span style="font-size:12px;color:var(--text-3)">NFO sidecar:</span>
+      <span class="sidecar-path new">${Verify.basename(a.nfo_path)}</span>
+    </div>`);
+    if (a.tvshow_nfo_path) {
+      sidecars.push(`<div class="sidecar-row">
+        <span class="sidecar-icon">📺</span>
+        <span style="font-size:12px;color:var(--text-3)">Show NFO:</span>
+        <span class="sidecar-path new">${Verify.basename(a.tvshow_nfo_path)}</span>
+      </div>`);
+    }
+    if (f.subtitle_changes?.length) {
+      f.subtitle_changes.forEach(s => {
+        sidecars.push(`<div class="sidecar-row">
+          <span class="sidecar-icon">💬</span>
+          <span class="sidecar-sub-before">${s.before_filename}</span>
+          <span class="sidecar-sub-arrow">→</span>
+          <span class="sidecar-sub-after">${s.after_filename}</span>
+        </div>`);
+      });
+    }
+
+    return `
+      <div class="ba-grid">
+        <div class="ba-col">
+          <div class="ba-col-header ba-before-hdr">
+            <span style="font-size:16px">📁</span> Before (current)
+          </div>
+          ${fieldRows('before')}
+        </div>
+        <div class="ba-col">
+          <div class="ba-col-header ba-after-hdr">
+            <span style="font-size:16px">✨</span> After (proposed)
+          </div>
+          ${fieldRows('after')}
+        </div>
+      </div>
+      ${sidecars.length ? `
+      <div class="verify-sidecars">
+        <div class="sidecar-title">Files that will be created / relocated</div>
+        ${sidecars.join('')}
+      </div>` : ''}`;
+  },
+
+  basename(p) {
+    if (!p) return '';
+    return p.replace(/\\/g, '/').split('/').pop();
+  },
+
+  toggleExpand(id, event) {
+    if (event?.target?.closest('.verify-check')) return;
+    const item = document.getElementById(`vi-${id}`);
+    if (!item) return;
+    item.classList.toggle('expanded');
+  },
+
+  toggleSelect(id, checked) {
+    if (checked) Verify.selected.add(id);
+    else         Verify.selected.delete(id);
+    const item = document.getElementById(`vi-${id}`);
+    if (item) item.classList.toggle('unchecked', !checked);
+    Verify.updateToolbar();
+  },
+
+  toggleAll(cb) {
+    Verify.filtered.forEach(f => {
+      if (cb.checked) Verify.selected.add(f.id);
+      else            Verify.selected.delete(f.id);
+      const item = document.getElementById(`vi-${f.id}`);
+      if (item) item.classList.toggle('unchecked', !cb.checked);
+    });
+    // Update checkboxes in DOM
+    document.querySelectorAll('.vi-chk').forEach(el => {
+      const id = parseInt(el.dataset.id);
+      if (Verify.filtered.find(f => f.id === id)) el.checked = cb.checked;
+    });
+    Verify.updateToolbar();
+  },
+
+  updateToolbar() {
+    // Count selected within currently filtered set
+    const filteredIds = new Set(Verify.filtered.map(f => f.id));
+    const selInView = [...Verify.selected].filter(id => filteredIds.has(id)).length;
+    const totalInView = Verify.filtered.length;
+
+    document.getElementById('selected-count').textContent =
+      `${selInView.toLocaleString()} / ${totalInView.toLocaleString()} selected`;
+
+    const chkAll = document.getElementById('chk-all');
+    chkAll.checked = selInView > 0 && selInView === totalInView;
+    chkAll.indeterminate = selInView > 0 && selInView < totalInView;
+
+    const anySelected = selInView > 0;
+    document.getElementById('btn-dryrun').disabled = !anySelected;
+    document.getElementById('btn-apply').disabled  = !anySelected;
+
+    document.getElementById('confirm-count').textContent =
+      `${selInView.toLocaleString()} file${selInView !== 1 ? 's' : ''}`;
+  },
+
+  confirmApply() {
+    const filteredIds = new Set(Verify.filtered.map(f => f.id));
+    const selCount = [...Verify.selected].filter(id => filteredIds.has(id)).length;
+    if (selCount === 0) { App.toast('No files selected', 'warning'); return; }
+    document.getElementById('confirm-count').textContent =
+      `${selCount} file${selCount !== 1 ? 's' : ''}`;
+    document.getElementById('apply-confirm-modal').classList.add('open');
+    lucide.createIcons();
+  },
+
+  closeConfirm() {
+    document.getElementById('apply-confirm-modal').classList.remove('open');
+  },
+
+  async run(dry_run) {
+    const filteredIds = new Set(Verify.filtered.map(f => f.id));
+    const ids = [...Verify.selected].filter(id => filteredIds.has(id));
+    if (!ids.length) { App.toast('No files selected', 'warning'); return; }
+
+    // Open progress overlay
+    const overlay = document.getElementById('apply-overlay');
+    overlay.classList.add('open');
+    document.getElementById('apply-overlay-title').textContent =
+      dry_run ? 'Dry Run Preview' : `Applying ${ids.length} files…`;
+    document.getElementById('apply-prog-bar').style.width = '0%';
+    document.getElementById('apply-prog-log').innerHTML = '';
+    document.getElementById('apply-close-btn').style.display = 'none';
+
+    const data = await App.api.post('/api/jobs/apply-selected',
+                                    { file_ids: ids, dry_run });
+    if (data.error) {
+      App.toast(data.error, 'error');
+      overlay.classList.remove('open');
+      return;
+    }
+
+    const es = new EventSource(`/stream/${data.job_id}`);
+    es.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'progress') {
+        const pct = msg.total > 0 ? (msg.current / msg.total * 100).toFixed(1) : 0;
+        document.getElementById('apply-prog-bar').style.width = pct + '%';
+        document.getElementById('apply-prog-count').textContent = `${msg.current} / ${msg.total}`;
+        document.getElementById('apply-prog-file').textContent = msg.filename || '';
+        if (msg.result) Verify.overlayLog(
+          `${msg.filename} → ${msg.result}${msg.confidence ? ` (${msg.confidence}%)` : ''}`,
+          msg.result === 'applied' ? 'success' : 'info'
+        );
+      }
+      if (msg.type === 'log') {
+        Verify.overlayLog(msg.message, msg.level || 'info');
+      }
+      if (msg.type === 'complete' || msg.type === 'done') {
+        es.close();
+        document.getElementById('apply-prog-bar').style.width = '100%';
+        document.getElementById('apply-close-btn').style.display = '';
+        if (!dry_run && msg.applied) {
+          App.toast(`Applied ${msg.applied} files`, 'success');
+          // Reload after a moment
+          setTimeout(() => Verify.load(), 1500);
+        }
+      }
+      if (msg.type === 'error') {
+        es.close();
+        Verify.overlayLog(msg.message, 'error');
+        document.getElementById('apply-close-btn').style.display = '';
+      }
+    };
+    es.onerror = () => {
+      es.close();
+      document.getElementById('apply-close-btn').style.display = '';
+      Verify.overlayLog('Connection lost', 'error');
+    };
+  },
+
+  overlayLog(msg, level = 'info') {
+    const el = document.getElementById('apply-prog-log');
+    if (!el) return;
+    const now = new Date().toLocaleTimeString('en-US', { hour12: false });
+    const line = document.createElement('div');
+    line.className = `log-line ${level}`;
+    line.innerHTML = `<span class="log-time">${now}</span><span class="log-msg">${msg}</span>`;
+    el.appendChild(line);
+    el.scrollTop = el.scrollHeight;
+  },
+
+  closeApplyOverlay() {
+    document.getElementById('apply-overlay').classList.remove('open');
+  },
+};
+
+document.addEventListener('DOMContentLoaded', () => {
+  Verify.load();
+});
+</script>
+{% endblock %}

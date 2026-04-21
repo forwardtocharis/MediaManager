@@ -1,0 +1,484 @@
+{% extends "base.html" %}
+{% block title %}Library — MediaManager{% endblock %}
+{% block header_title %}Library{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="page-title">Media Library</div>
+    <div class="page-sub">Browse, search, and edit identified media files</div>
+  </div>
+  <div class="page-actions">
+    <button class="btn btn-ghost btn-sm" onclick="Library.resetSelected()" id="bulk-reset-btn" style="display:none">
+      <i data-lucide="rotate-ccw"></i> Reset selected
+    </button>
+    <button class="btn btn-ghost btn-sm" onclick="Library.skipSelected()" id="bulk-skip-btn" style="display:none">
+      <i data-lucide="x-circle"></i> Skip selected
+    </button>
+    <button class="btn btn-secondary" onclick="Library.load()">
+      <i data-lucide="refresh-cw"></i> Refresh
+    </button>
+  </div>
+</div>
+
+<div class="table-wrap">
+  <!-- Toolbar -->
+  <div class="table-toolbar">
+    <div class="search-wrap">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input type="text" class="search-input" id="search-input" placeholder="Search filename, title..."
+             oninput="Library.onSearch(this.value)">
+    </div>
+    <select class="filter-select" id="filter-status" onchange="Library.applyFilters()">
+      <option value="all">All Status</option>
+      <option value="pending">Pending</option>
+      <option value="identified">Identified</option>
+      <option value="needs_llm">Needs LLM</option>
+      <option value="needs_manual">Manual Review</option>
+      <option value="applied">Applied</option>
+      <option value="skipped">Skipped</option>
+      <option value="error">Error</option>
+    </select>
+    <select class="filter-select" id="filter-type" onchange="Library.applyFilters()">
+      <option value="all">All Types</option>
+      <option value="movie">Movies</option>
+      <option value="tv">TV Shows</option>
+    </select>
+    <span class="text-muted text-small" id="result-count"></span>
+  </div>
+
+  <!-- Table -->
+  <div style="overflow-x:auto">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:36px"><input type="checkbox" class="checkbox" id="select-all" onchange="Library.toggleSelectAll(this)"></th>
+          <th onclick="Library.sort('filename')" id="th-filename">File <i data-lucide="chevrons-up-down" style="width:11px;height:11px;vertical-align:middle"></i></th>
+          <th onclick="Library.sort('confirmed_title')" id="th-title">Identified As <i data-lucide="chevrons-up-down" style="width:11px;height:11px;vertical-align:middle"></i></th>
+          <th onclick="Library.sort('confidence')" id="th-conf">Confidence</th>
+          <th>Type</th>
+          <th onclick="Library.sort('status')" id="th-status">Status</th>
+          <th style="width:80px">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="files-tbody">
+        <tr><td colspan="7" style="padding:40px;text-align:center;color:var(--text-3)">Loading...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Pagination -->
+  <div class="pagination">
+    <span id="pagination-info" class="text-muted text-small"></span>
+    <div class="pagination-controls" id="pagination-controls"></div>
+  </div>
+</div>
+
+<script>
+const Library = {
+  state: {
+    page: 1, per_page: 50,
+    sort: 'id', dir: 'asc',
+    status: 'all', type: 'all', search: '',
+    selected: new Set(),
+    searchTimer: null,
+  },
+
+  async load() {
+    const s = Library.state;
+    const params = new URLSearchParams({
+      page: s.page, per_page: s.per_page,
+      sort: s.sort, dir: s.dir,
+      status: s.status, type: s.type,
+      search: s.search,
+    });
+    const data = await App.api.get('/api/files?' + params);
+    Library.render(data);
+  },
+
+  render(data) {
+    const tbody = document.getElementById('files-tbody');
+    if (!data.files || data.files.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state">
+        <i data-lucide="film" style="width:40px;height:40px"></i>
+        <h3>No files found</h3>
+        <p>Adjust your filters or scan your NAS first.</p>
+      </div></td></tr>`;
+      lucide.createIcons(); return;
+    }
+
+    tbody.innerHTML = data.files.map(f => `
+      <tr data-id="${f.id}" onclick="Library.openEditPanel(${f.id}, event)" style="cursor:pointer">
+        <td onclick="event.stopPropagation()">
+          <input type="checkbox" class="checkbox row-check" data-id="${f.id}"
+                 ${Library.state.selected.has(f.id) ? 'checked' : ''}
+                 onchange="Library.toggleSelect(${f.id}, this.checked)">
+        </td>
+        <td>
+          <div class="file-name" title="${f.original_path}">${f.filename}</div>
+          <div style="font-size:11px;color:var(--text-4);margin-top:2px">${f.parent_folder || ''}</div>
+        </td>
+        <td>
+          <div class="confirmed-title">${f.confirmed_title || f.guessed_title || '<span style="color:var(--text-4)">—</span>'}</div>
+          ${f.confirmed_year ? `<span style="font-size:11px;color:var(--text-3)">${f.confirmed_year}${f.season ? ` · S${String(f.season).padStart(2,'0')}E${String(f.episode||'?').padStart(2,'0')}` : ''}</span>` : ''}
+        </td>
+        <td>
+          ${Library.renderConfidence(f.confidence)}
+        </td>
+        <td>
+          ${f.confirmed_type || f.guessed_type
+            ? `<span class="badge badge-${f.confirmed_type||f.guessed_type}">${(f.confirmed_type||f.guessed_type).toUpperCase()}</span>`
+            : '<span style="color:var(--text-4)">—</span>'}
+        </td>
+        <td><span class="badge badge-${f.status}">${Library.statusLabel(f.status)}</span></td>
+        <td onclick="event.stopPropagation()">
+          <div style="display:flex;gap:4px">
+            <button class="btn btn-ghost btn-sm" title="Edit" onclick="Library.openEditPanel(${f.id})">
+              <i data-lucide="edit-2"></i>
+            </button>
+            <button class="btn btn-ghost btn-sm" title="Skip" onclick="Library.skipFile(${f.id})">
+              <i data-lucide="x"></i>
+            </button>
+          </div>
+        </td>
+      </tr>`).join('');
+
+    document.getElementById('result-count').textContent = `${data.total.toLocaleString()} files`;
+
+    // Pagination
+    const info = document.getElementById('pagination-info');
+    const start = ((data.page - 1) * data.per_page) + 1;
+    const end   = Math.min(data.page * data.per_page, data.total);
+    info.textContent = `Showing ${start}–${end} of ${data.total.toLocaleString()}`;
+    Library.renderPagination(data.page, data.total_pages);
+    lucide.createIcons();
+
+    // Bulk action buttons
+    Library.updateBulkButtons();
+  },
+
+  renderConfidence(val) {
+    if (!val && val !== 0) return '<span style="color:var(--text-4)">—</span>';
+    const pct = Math.round(val);
+    const cls = pct >= 75 ? 'conf-high' : pct >= 50 ? 'conf-med' : 'conf-low';
+    return `<div class="confidence-bar ${cls}">
+      <div class="confidence-track"><div class="confidence-fill" style="width:${pct}%"></div></div>
+      <span class="confidence-val">${pct}</span>
+    </div>`;
+  },
+
+  statusLabel(s) {
+    return { identified:'Identified', pending:'Pending', needs_llm:'LLM',
+             needs_manual:'Manual', applied:'Applied', skipped:'Skipped', error:'Error' }[s] || s;
+  },
+
+  renderPagination(page, totalPages) {
+    const el = document.getElementById('pagination-controls');
+    if (totalPages <= 1) { el.innerHTML = ''; return; }
+    let html = `<button class="page-btn" onclick="Library.goPage(${page-1})" ${page<=1?'disabled':''}>‹</button>`;
+    const pages = Library.pageRange(page, totalPages);
+    pages.forEach(p => {
+      if (p === '…') html += `<span style="padding:4px 6px;color:var(--text-4)">…</span>`;
+      else html += `<button class="page-btn ${p===page?'active':''}" onclick="Library.goPage(${p})">${p}</button>`;
+    });
+    html += `<button class="page-btn" onclick="Library.goPage(${page+1})" ${page>=totalPages?'disabled':''}>›</button>`;
+    el.innerHTML = html;
+  },
+
+  pageRange(current, total) {
+    if (total <= 7) return Array.from({length:total}, (_,i)=>i+1);
+    const r = [1];
+    if (current > 3) r.push('…');
+    for (let i = Math.max(2,current-1); i <= Math.min(total-1,current+1); i++) r.push(i);
+    if (current < total - 2) r.push('…');
+    r.push(total);
+    return r;
+  },
+
+  goPage(p) { Library.state.page = p; Library.load(); },
+
+  sort(col) {
+    if (Library.state.sort === col) {
+      Library.state.dir = Library.state.dir === 'asc' ? 'desc' : 'asc';
+    } else {
+      Library.state.sort = col; Library.state.dir = 'asc';
+    }
+    Library.state.page = 1;
+    Library.load();
+  },
+
+  onSearch(val) {
+    clearTimeout(Library.state.searchTimer);
+    Library.state.searchTimer = setTimeout(() => {
+      Library.state.search = val;
+      Library.state.page = 1;
+      Library.load();
+    }, 350);
+  },
+
+  applyFilters() {
+    Library.state.status = document.getElementById('filter-status').value;
+    Library.state.type   = document.getElementById('filter-type').value;
+    Library.state.page = 1;
+    Library.load();
+  },
+
+  toggleSelectAll(cb) {
+    document.querySelectorAll('.row-check').forEach(el => {
+      el.checked = cb.checked;
+      const id = parseInt(el.dataset.id);
+      if (cb.checked) Library.state.selected.add(id);
+      else Library.state.selected.delete(id);
+    });
+    Library.updateBulkButtons();
+  },
+
+  toggleSelect(id, checked) {
+    if (checked) Library.state.selected.add(id);
+    else Library.state.selected.delete(id);
+    Library.updateBulkButtons();
+  },
+
+  updateBulkButtons() {
+    const has = Library.state.selected.size > 0;
+    document.getElementById('bulk-reset-btn').style.display = has ? '' : 'none';
+    document.getElementById('bulk-skip-btn').style.display  = has ? '' : 'none';
+  },
+
+  async skipFile(id) {
+    await App.api.post(`/api/files/${id}/skip`, {});
+    App.toast('Skipped', 'info');
+    Library.load();
+  },
+
+  async skipSelected() {
+    await Promise.all([...Library.state.selected].map(id => App.api.post(`/api/files/${id}/skip`, {})));
+    Library.state.selected.clear();
+    App.toast(`Skipped ${Library.state.selected.size} files`, 'info');
+    Library.load();
+  },
+
+  async resetSelected() {
+    const ids = [...Library.state.selected];
+    await Promise.all(ids.map(id => App.api.post(`/api/files/${id}/reset`, {})));
+    Library.state.selected.clear();
+    App.toast(`Reset ${ids.length} files to pending`, 'info');
+    Library.load();
+  },
+
+  async openEditPanel(id, e) {
+    if (e && e.target.closest('button')) return;
+    const file = await App.api.get(`/api/files/${id}`);
+    EditPanel.open(file);
+  }
+};
+
+// ── Edit Panel ────────────────────────────────────────────────────────────────
+const EditPanel = {
+  current: null,
+  tmdbResults: [],
+  selectedTmdb: null,
+
+  open(file) {
+    EditPanel.current = file;
+    EditPanel.selectedTmdb = null;
+    document.getElementById('panel-title').textContent = 'Edit File';
+    document.getElementById('panel-body').innerHTML = EditPanel.buildBody(file);
+    document.getElementById('panel-footer').innerHTML = EditPanel.buildFooter(file);
+    App.openPanel();
+    lucide.createIcons();
+  },
+
+  buildBody(f) {
+    const genres = (() => { try { return JSON.parse(f.genres||'[]').join(', '); } catch { return ''; } })();
+    return `
+      <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px">
+        <div class="file-name" style="font-size:12px" title="${f.original_path}">${f.filename}</div>
+        <div style="font-size:11px;color:var(--text-4);margin-top:4px">${f.original_path}</div>
+        <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+          <span class="badge badge-${f.status}">${f.status}</span>
+          ${f.phase ? `<span class="badge badge-pending">Phase ${f.phase}</span>` : ''}
+          <span class="text-small text-muted">${f.file_size ? (f.file_size/1024/1024).toFixed(0)+' MB' : ''}</span>
+        </div>
+      </div>
+
+      <!-- TMDB Search -->
+      <div class="form-group">
+        <label class="form-label">TMDB Lookup</label>
+        <div style="display:flex;gap:8px">
+          <input type="text" class="form-input" id="tmdb-search-q"
+                 value="${f.confirmed_title || f.guessed_title || ''}"
+                 placeholder="Title to search...">
+          <select class="filter-select" id="tmdb-search-type" style="width:90px">
+            <option value="movie" ${(f.confirmed_type||f.guessed_type) !== 'tv' ? 'selected':''}>Movie</option>
+            <option value="tv"    ${(f.confirmed_type||f.guessed_type) === 'tv'  ? 'selected':''}>TV</option>
+          </select>
+          <button class="btn btn-secondary btn-sm" onclick="EditPanel.searchTmdb()">
+            <i data-lucide="search"></i>
+          </button>
+        </div>
+        <div id="tmdb-results-box" style="margin-top:8px"></div>
+      </div>
+
+      <hr class="divider">
+
+      <!-- Manual fields -->
+      <div class="form-group">
+        <label class="form-label">Confirmed Title</label>
+        <input type="text" class="form-input" id="edit-title" value="${f.confirmed_title || ''}">
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Year</label>
+          <input type="number" class="form-input" id="edit-year" value="${f.confirmed_year || ''}" min="1888" max="2099">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Type</label>
+          <select class="form-select" id="edit-type">
+            <option value="movie" ${(f.confirmed_type||'movie')==='movie'?'selected':''}>Movie</option>
+            <option value="tv"    ${f.confirmed_type==='tv'?'selected':''}>TV Show</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="form-row" id="tv-fields" style="${(f.confirmed_type||f.guessed_type)==='tv'?'':'display:none'}">
+        <div class="form-group">
+          <label class="form-label">Season</label>
+          <input type="number" class="form-input" id="edit-season" value="${f.season || ''}">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Episode</label>
+          <input type="number" class="form-input" id="edit-episode" value="${f.episode || ''}">
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">TMDB ID</label>
+          <input type="number" class="form-input" id="edit-tmdb-id" value="${f.tmdb_id || ''}">
+        </div>
+        <div class="form-group">
+          <label class="form-label">IMDb ID</label>
+          <input type="text" class="form-input" id="edit-imdb-id" value="${f.imdb_id || ''}" placeholder="tt0000000">
+        </div>
+      </div>
+
+      ${genres || f.rating ? `
+      <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px;font-size:12px;color:var(--text-3)">
+        ${genres ? `<div><strong style="color:var(--text-2)">Genres:</strong> ${genres}</div>` : ''}
+        ${f.rating ? `<div style="margin-top:4px"><strong style="color:var(--text-2)">Rating:</strong> ${f.rating}</div>` : ''}
+        ${f.plot ? `<div style="margin-top:6px;line-height:1.5">${f.plot.substring(0,200)}${f.plot.length>200?'…':''}</div>` : ''}
+      </div>` : ''}
+
+      <div class="form-group">
+        <label class="form-label">Status</label>
+        <select class="form-select" id="edit-status">
+          <option value="identified"  ${f.status==='identified'  ?'selected':''}>Identified</option>
+          <option value="pending"     ${f.status==='pending'     ?'selected':''}>Pending</option>
+          <option value="needs_llm"   ${f.status==='needs_llm'   ?'selected':''}>Needs LLM</option>
+          <option value="needs_manual"${f.status==='needs_manual'?'selected':''}>Manual Review</option>
+          <option value="skipped"     ${f.status==='skipped'     ?'selected':''}>Skipped</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Notes</label>
+        <textarea class="form-textarea" id="edit-notes" rows="2">${f.notes || ''}</textarea>
+      </div>`;
+  },
+
+  buildFooter(f) {
+    return `
+      <button class="btn btn-secondary" style="flex:1" onclick="App.closePanel()">Cancel</button>
+      <button class="btn btn-danger btn-sm" onclick="EditPanel.reset(${f.id})" title="Reset to pending">
+        <i data-lucide="rotate-ccw"></i>
+      </button>
+      <button class="btn btn-primary" style="flex:2" onclick="EditPanel.save(${f.id})">
+        <i data-lucide="save"></i> Save Changes
+      </button>`;
+  },
+
+  async searchTmdb() {
+    const q    = document.getElementById('tmdb-search-q').value.trim();
+    const type = document.getElementById('tmdb-search-type').value;
+    if (!q) return;
+    const box = document.getElementById('tmdb-results-box');
+    box.innerHTML = '<div class="text-muted text-small">Searching...</div>';
+    const data = await App.api.post('/api/tmdb/search', { title: q, type });
+    if (data.error) { box.innerHTML = `<div style="color:var(--red)">${data.error}</div>`; return; }
+    EditPanel.tmdbResults = data.results || [];
+    if (!EditPanel.tmdbResults.length) { box.innerHTML = '<div class="text-muted text-small">No results found.</div>'; return; }
+    box.innerHTML = `<div class="tmdb-results">${EditPanel.tmdbResults.map((r,i) => `
+      <div class="tmdb-result-item" id="tmdb-r-${i}" onclick="EditPanel.selectResult(${i})">
+        <div class="result-main">
+          <div class="result-title">${r.title}</div>
+          <div class="result-meta">${r.year} · TMDB #${r.tmdb_id}</div>
+          ${r.overview ? `<div class="result-overview">${r.overview}</div>` : ''}
+        </div>
+        <span class="badge badge-${r.type}">${r.type.toUpperCase()}</span>
+      </div>`).join('')}
+    </div>`;
+  },
+
+  async selectResult(idx) {
+    document.querySelectorAll('.tmdb-result-item').forEach(e => e.classList.remove('selected'));
+    document.getElementById(`tmdb-r-${idx}`)?.classList.add('selected');
+    const r = EditPanel.tmdbResults[idx];
+    EditPanel.selectedTmdb = r;
+    document.getElementById('edit-title').value   = r.title;
+    document.getElementById('edit-year').value    = r.year;
+    document.getElementById('edit-type').value    = r.type;
+    document.getElementById('edit-tmdb-id').value = r.tmdb_id;
+    document.getElementById('tv-fields').style.display = r.type === 'tv' ? '' : 'none';
+
+    // Fetch full details to fill genres/plot
+    const details = await App.api.post('/api/tmdb/details', { tmdb_id: r.tmdb_id, type: r.type });
+    if (details && !details.error) EditPanel.current = { ...EditPanel.current, ...details };
+  },
+
+  async save(id) {
+    const type = document.getElementById('edit-type').value;
+    const updates = {
+      confirmed_title: document.getElementById('edit-title').value.trim(),
+      confirmed_year:  parseInt(document.getElementById('edit-year').value) || null,
+      confirmed_type:  type,
+      tmdb_id:  parseInt(document.getElementById('edit-tmdb-id').value) || null,
+      imdb_id:  document.getElementById('edit-imdb-id').value.trim() || null,
+      season:   type === 'tv' ? parseInt(document.getElementById('edit-season').value) || null : null,
+      episode:  type === 'tv' ? parseInt(document.getElementById('edit-episode').value) || null : null,
+      status:   document.getElementById('edit-status').value,
+      notes:    document.getElementById('edit-notes').value.trim() || null,
+    };
+    if (updates.confirmed_title && updates.status === 'needs_llm') updates.status = 'identified';
+    if (updates.confirmed_title && !document.getElementById('edit-status').value.includes('skip')) {
+      updates.phase = updates.tmdb_id ? (EditPanel.current?.phase || 1) : 3;
+    }
+    await App.api.put(`/api/files/${id}`, updates);
+    App.toast('Saved!', 'success');
+    App.closePanel();
+    Library.load();
+  },
+
+  async reset(id) {
+    await App.api.post(`/api/files/${id}/reset`, {});
+    App.toast('Reset to pending', 'info');
+    App.closePanel();
+    Library.load();
+  },
+};
+
+// Init
+document.addEventListener('DOMContentLoaded', () => {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('status')) {
+    document.getElementById('filter-status').value = params.get('status');
+    Library.state.status = params.get('status');
+  }
+  document.getElementById('edit-type')?.addEventListener('change', e => {
+    document.getElementById('tv-fields').style.display = e.target.value === 'tv' ? '' : 'none';
+  });
+  Library.load();
+});
+</script>
+{% endblock %}

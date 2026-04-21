@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}Duplicates — MediaManager{% endblock %}
+{% block header_title %}Duplicates{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="page-title">Duplicate Files</div>
+    <div class="page-sub">Files identified as the same title — choose which copy to keep</div>
+  </div>
+  <button class="btn btn-secondary" onclick="Dups.load()">
+    <i data-lucide="refresh-cw"></i> Refresh
+  </button>
+</div>
+
+<div id="dups-container">
+  <div class="empty-state">
+    <i data-lucide="loader-2" style="width:32px;height:32px;animation:spin 1s linear infinite"></i>
+    <p>Loading duplicates...</p>
+  </div>
+</div>
+
+<style>
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.dup-card { margin-bottom: 20px; }
+.dup-files-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 12px; }
+.dup-file-option {
+  background: var(--bg-2);
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  cursor: pointer;
+  transition: var(--transition);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dup-file-option:hover { border-color: var(--accent); }
+.dup-file-option.selected { border-color: var(--green); background: rgba(52,211,153,.06); }
+</style>
+
+<script>
+const Dups = {
+  async load() {
+    const data = await App.api.get('/api/duplicates');
+    Dups.render(data.duplicates || []);
+  },
+
+  render(dups) {
+    const el = document.getElementById('dups-container');
+    if (!dups.length) {
+      el.innerHTML = `<div class="empty-state">
+        <i data-lucide="check-circle-2" style="width:48px;height:48px;color:var(--green)"></i>
+        <h3>No duplicates found</h3>
+        <p>All identified files have unique TMDB IDs.</p>
+      </div>`;
+      lucide.createIcons(); return;
+    }
+
+    el.innerHTML = dups.map(dup => `
+      <div class="card dup-card" id="dup-${dup.id}">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+          <div>
+            <div style="font-weight:700;font-size:14px">TMDB #${dup.tmdb_id}</div>
+            <div class="text-muted text-small">${dup.files.length} copies found — click to select the one to keep</div>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-success btn-sm" onclick="Dups.resolve(${dup.id},'keep_all')">Keep All</button>
+            <button class="btn btn-primary btn-sm" id="keep-btn-${dup.id}" disabled onclick="Dups.resolveKeep(${dup.id})">
+              Keep Selected
+            </button>
+          </div>
+        </div>
+        <div class="dup-files-grid">
+          ${dup.files.map(f => `
+          <div class="dup-file-option" id="opt-${dup.id}-${f.id}" onclick="Dups.select(${dup.id}, ${f.id})">
+            <div style="font-family:JetBrains Mono,monospace;font-size:11.5px;color:var(--text-2)">${f.filename}</div>
+            <div style="font-size:11px;color:var(--text-4)">${f.original_path}</div>
+            <div style="display:flex;gap:8px;margin-top:4px">
+              <span class="badge badge-pending">${f.extension}</span>
+              <span class="text-small text-muted">${f.file_size ? (f.file_size/1024/1024).toFixed(0)+' MB' : '?'}</span>
+            </div>
+          </div>`).join('')}
+        </div>
+      </div>`).join('');
+    lucide.createIcons();
+  },
+
+  select(dupId, fileId) {
+    document.querySelectorAll(`#dup-${dupId} .dup-file-option`).forEach(el => el.classList.remove('selected'));
+    document.getElementById(`opt-${dupId}-${fileId}`)?.classList.add('selected');
+    const btn = document.getElementById(`keep-btn-${dupId}`);
+    if (btn) { btn.disabled = false; btn.dataset.keepId = fileId; }
+  },
+
+  async resolveKeep(dupId) {
+    const btn = document.getElementById(`keep-btn-${dupId}`);
+    const keepId = btn?.dataset.keepId;
+    if (!keepId) return;
+    await Dups.resolve(dupId, `keep_id:${keepId}`);
+  },
+
+  async resolve(dupId, resolution) {
+    await App.api.post(`/api/duplicates/${dupId}/resolve`, { resolution });
+    document.getElementById(`dup-${dupId}`)?.remove();
+    App.toast(resolution.startsWith('keep_id') ? 'Kept selected copy' : 'Keeping all copies', 'success');
+    if (!document.querySelector('.dup-card')) Dups.load();
+  },
+};
+
+document.addEventListener('DOMContentLoaded', () => Dups.load());
+</script>
+{% endblock %}

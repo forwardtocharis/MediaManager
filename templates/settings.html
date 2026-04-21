@@ -1,0 +1,438 @@
+{% extends "base.html" %}
+{% block title %}Settings — MediaManager{% endblock %}
+{% block header_title %}Settings{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="page-title">Settings</div>
+    <div class="page-sub">Configure paths, API keys, LLM provider, and identification thresholds</div>
+  </div>
+  <div class="page-actions">
+    <button class="btn btn-primary" onclick="Settings.save()">
+      <i data-lucide="save"></i> Save Settings
+    </button>
+  </div>
+</div>
+
+<div class="settings-grid">
+  <!-- Nav -->
+  <div class="settings-nav">
+    <div class="settings-nav-item active" data-section="paths" onclick="Settings.showSection('paths')">
+      <i data-lucide="folder"></i> Source & Paths
+    </div>
+    <div class="settings-nav-item" data-section="api" onclick="Settings.showSection('api')">
+      <i data-lucide="key"></i> API Keys
+    </div>
+    <div class="settings-nav-item" data-section="llm" onclick="Settings.showSection('llm')">
+      <i data-lucide="bot"></i> LLM
+    </div>
+    <div class="settings-nav-item" data-section="identification" onclick="Settings.showSection('identification')">
+      <i data-lucide="sliders"></i> Identification
+    </div>
+    <div class="settings-nav-item" data-section="files" onclick="Settings.showSection('files')">
+      <i data-lucide="file-video"></i> File Types
+    </div>
+  </div>
+
+  <!-- Content -->
+  <div class="settings-content">
+
+    <!-- Paths -->
+    <div class="settings-section active" id="section-paths">
+      <div>
+        <div class="settings-section-title">Source & Destination Paths</div>
+        <div class="settings-section-desc">NAS paths where your media is stored. Use UNC paths (\\NAS\Share) or mapped drives (Z:\).</div>
+      </div>
+      <div class="settings-card">
+        <div class="form-group">
+          <label class="form-label">Movies Source Path</label>
+          <div class="input-with-btn">
+            <input type="text" class="form-input" id="movies_path" placeholder="\\NAS\Media\Movies or Z:\Movies">
+            <button class="btn btn-secondary btn-sm" onclick="Settings.browsePath('movies_path')"><i data-lucide="folder-open"></i></button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">TV Shows Source Path</label>
+          <div class="input-with-btn">
+            <input type="text" class="form-input" id="tv_path" placeholder="\\NAS\Media\TV Shows or Z:\TV">
+            <button class="btn btn-secondary btn-sm" onclick="Settings.browsePath('tv_path')"><i data-lucide="folder-open"></i></button>
+          </div>
+        </div>
+      </div>
+      <div class="settings-card">
+        <div style="font-size:13px;font-weight:600;margin-bottom:4px">Output Paths <span style="font-size:11px;color:var(--text-4);font-weight:400">(leave blank to rename in place)</span></div>
+        <div class="form-group">
+          <label class="form-label">Movies Output Path</label>
+          <div class="input-with-btn">
+            <input type="text" class="form-input" id="movies_out_path" placeholder="Same as source if blank">
+            <button class="btn btn-secondary btn-sm" onclick="Settings.browsePath('movies_out_path')"><i data-lucide="folder-open"></i></button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">TV Shows Output Path</label>
+          <div class="input-with-btn">
+            <input type="text" class="form-input" id="tv_out_path" placeholder="Same as source if blank">
+            <button class="btn btn-secondary btn-sm" onclick="Settings.browsePath('tv_out_path')"><i data-lucide="folder-open"></i></button>
+          </div>
+        </div>
+      </div>
+      <div class="settings-card">
+        <div class="form-group">
+          <label class="form-label">Database Path</label>
+          <input type="text" class="form-input" id="db_path" value="mediamanager.db">
+          <div class="form-hint">SQLite database file. All pipeline state is stored here.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- API Keys -->
+    <div class="settings-section" id="section-api">
+      <div>
+        <div class="settings-section-title">API Keys</div>
+        <div class="settings-section-desc">Keys for media metadata lookup. TMDB is required. OMDB is optional (used as fallback).</div>
+      </div>
+      <div class="settings-card">
+        <div class="form-group">
+          <label class="form-label">TMDB API Key <a href="https://www.themoviedb.org/settings/api" target="_blank" style="color:var(--accent-l);font-size:11px">Get key →</a></label>
+          <div class="input-with-btn">
+            <input type="password" class="form-input" id="tmdb_key" placeholder="Your TMDB v3 API key">
+            <button class="btn btn-secondary btn-sm" onclick="Settings.testApi('tmdb')">Test</button>
+          </div>
+          <div id="tmdb-test-result" class="form-hint"></div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">OMDB API Key <a href="https://www.omdbapi.com/apikey.aspx" target="_blank" style="color:var(--accent-l);font-size:11px">Get key →</a></label>
+          <div class="input-with-btn">
+            <input type="password" class="form-input" id="omdb_key" placeholder="Your OMDB API key (optional)">
+            <button class="btn btn-secondary btn-sm" onclick="Settings.testApi('omdb')">Test</button>
+          </div>
+          <div id="omdb-test-result" class="form-hint"></div>
+        </div>
+      </div>
+      <div class="settings-card">
+        <div style="font-size:13px;font-weight:600;margin-bottom:12px">Rate Limits</div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">TMDB Req/sec</label>
+            <input type="number" class="form-input" id="tmdb_rps" value="40" min="1" max="50">
+          </div>
+          <div class="form-group">
+            <label class="form-label">TMDB Daily Limit</label>
+            <input type="number" class="form-input" id="tmdb_daily" value="0" min="0">
+            <div class="form-hint">0 = unlimited</div>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">OMDB Req/sec</label>
+            <input type="number" class="form-input" id="omdb_rps" value="2" min="1">
+          </div>
+          <div class="form-group">
+            <label class="form-label">OMDB Daily Limit</label>
+            <input type="number" class="form-input" id="omdb_daily" value="950" min="0">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- LLM -->
+    <div class="settings-section" id="section-llm">
+      <div>
+        <div class="settings-section-title">LLM Configuration</div>
+        <div class="settings-section-desc">Configure a local (Ollama, LM Studio) or cloud LLM to identify files that TMDB alone can't match.</div>
+      </div>
+      <div class="settings-card">
+        <div class="form-group">
+          <label class="form-label">Provider</label>
+          <div class="provider-grid" id="provider-grid"></div>
+        </div>
+        <div id="llm-custom-endpoint" class="form-group" style="display:none">
+          <label class="form-label">Custom Endpoint URL</label>
+          <input type="text" class="form-input" id="llm_endpoint" placeholder="http://localhost:1234/v1">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Model</label>
+          <div style="display:flex;gap:8px">
+            <select class="form-select" id="llm_model_select" onchange="document.getElementById('llm_model').value=this.value" style="flex:1">
+              <option value="">— Select or type below —</option>
+            </select>
+          </div>
+          <input type="text" class="form-input" id="llm_model" placeholder="e.g. llama3.2, mistral, gpt-4o" style="margin-top:6px">
+        </div>
+        <div id="llm-cloud-key" class="form-group" style="display:none">
+          <label class="form-label">API Key</label>
+          <input type="password" class="form-input" id="llm_api_key" placeholder="sk-...">
+        </div>
+      </div>
+      <div class="settings-card">
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Batch Size</label>
+            <input type="number" class="form-input" id="llm_batch" value="20" min="1" max="100">
+            <div class="form-hint">Files per LLM request. Lower for smaller models.</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Temperature</label>
+            <input type="number" class="form-input" id="llm_temp" value="0.1" min="0" max="2" step="0.1">
+            <div class="form-hint">Keep at 0.1 for factual tasks.</div>
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-secondary" onclick="Settings.testLlm()">
+          <i data-lucide="zap"></i> Test Connection
+        </button>
+        <div id="llm-test-result" style="display:flex;align-items:center;font-size:13px"></div>
+      </div>
+    </div>
+
+    <!-- Identification -->
+    <div class="settings-section" id="section-identification">
+      <div>
+        <div class="settings-section-title">Identification Thresholds</div>
+        <div class="settings-section-desc">Control how confident the system must be before auto-confirming or escalating to LLM review.</div>
+      </div>
+      <div class="settings-card">
+        <div class="form-group">
+          <label class="form-label">Auto-Confirm Threshold: <span id="thresh-auto-val">75</span>%</label>
+          <input type="range" id="auto_confirm_threshold" min="50" max="100" value="75"
+                 oninput="document.getElementById('thresh-auto-val').textContent=this.value"
+                 style="width:100%;accent-color:var(--accent)">
+          <div class="form-hint">Files scoring above this are auto-confirmed. Recommended: 70–80.</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">LLM Escalation Threshold: <span id="thresh-llm-val">50</span>%</label>
+          <input type="range" id="llm_threshold" min="10" max="80" value="50"
+                 oninput="document.getElementById('thresh-llm-val').textContent=this.value"
+                 style="width:100%;accent-color:var(--accent-l)">
+          <div class="form-hint">Files between this and the auto-confirm threshold go to LLM. Below this → manual review.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- File Types -->
+    <div class="settings-section" id="section-files">
+      <div>
+        <div class="settings-section-title">File Types</div>
+        <div class="settings-section-desc">Control which extensions are scanned as media and subtitles.</div>
+      </div>
+      <div class="settings-card">
+        <div class="form-group">
+          <label class="form-label">Media Extensions (comma-separated)</label>
+          <input type="text" class="form-input" id="media_extensions" value=".mkv, .mp4, .avi, .mov, .m4v, .ts, .m2ts">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Subtitle Extensions</label>
+          <input type="text" class="form-input" id="subtitle_extensions" value=".srt, .ass, .ssa, .sub, .vtt">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Min File Size (MB)</label>
+          <input type="number" class="form-input" id="min_size_mb" value="10" min="0">
+          <div class="form-hint">Files smaller than this are skipped (avoids samples/extras).</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const Settings = {
+  cfg: {},
+  selectedProvider: null,
+
+  async init() {
+    const cfg = await App.api.get('/api/config');
+    Settings.cfg = cfg;
+    Settings.populateFields(cfg);
+    Settings.loadProviders();
+  },
+
+  populateFields(cfg) {
+    const s  = cfg.source || {};
+    const o  = cfg.output || {};
+    const a  = cfg.api || {};
+    const rl = cfg.rate_limits || {};
+    const id = cfg.identification || {};
+    const fl = cfg.files || {};
+    const db = cfg.database || {};
+    const lm = cfg.llm || {};
+
+    Settings.setVal('movies_path',   s.movies_path || '');
+    Settings.setVal('tv_path',       s.tv_path || '');
+    Settings.setVal('movies_out_path', o.movies_path || '');
+    Settings.setVal('tv_out_path',   o.tv_path || '');
+    Settings.setVal('db_path',       db.path || 'mediamanager.db');
+
+    // API keys — don't reveal, just mark if set
+    document.getElementById('tmdb_key').placeholder = a.tmdb_key ? '(configured)' : 'Your TMDB v3 API key';
+    document.getElementById('omdb_key').placeholder = a.omdb_key ? '(configured)' : 'Your OMDB API key (optional)';
+
+    Settings.setVal('tmdb_rps',  (rl.tmdb||{}).requests_per_second || 40);
+    Settings.setVal('tmdb_daily', (rl.tmdb||{}).daily_limit || 0);
+    Settings.setVal('omdb_rps',  (rl.omdb||{}).requests_per_second || 2);
+    Settings.setVal('omdb_daily', (rl.omdb||{}).daily_limit || 950);
+
+    const autoT = id.auto_confirm_threshold || 75;
+    const llmT  = id.llm_threshold || 50;
+    Settings.setVal('auto_confirm_threshold', autoT);
+    Settings.setVal('llm_threshold', llmT);
+    document.getElementById('thresh-auto-val').textContent = autoT;
+    document.getElementById('thresh-llm-val').textContent  = llmT;
+
+    const exts = (fl.media_extensions || []).join(', ');
+    const subs = (fl.subtitle_extensions || []).join(', ');
+    Settings.setVal('media_extensions', exts || '.mkv, .mp4, .avi, .mov, .m4v, .ts, .m2ts');
+    Settings.setVal('subtitle_extensions', subs || '.srt, .ass, .ssa, .sub, .vtt');
+    Settings.setVal('min_size_mb', (fl.min_size_mb || 10));
+
+    Settings.setVal('llm_model',  lm.model || '');
+    Settings.setVal('llm_endpoint', lm.endpoint || '');
+    Settings.setVal('llm_batch', lm.batch_size || 20);
+    Settings.setVal('llm_temp',  lm.temperature || 0.1);
+    Settings.selectedProvider = lm.provider || null;
+  },
+
+  setVal(id, val) {
+    const el = document.getElementById(id);
+    if (el) el.value = val;
+  },
+
+  async loadProviders() {
+    const data = await App.api.get('/api/llm/providers');
+    const providers = data.providers || [];
+    const grid = document.getElementById('provider-grid');
+    grid.innerHTML = providers.map(p => `
+      <div class="provider-card ${Settings.selectedProvider===p.id?'selected':''}" id="pcard-${p.id}"
+           onclick="Settings.selectProvider('${p.id}', ${JSON.stringify(p.models||[])})">
+        <div class="provider-name">${p.label}</div>
+        <div class="provider-status ${p.available ? 'available':'unavailable'}">
+          ${p.available ? '● Available' : '○ Not detected'}
+        </div>
+        <div class="provider-models">
+          ${p.models?.length ? p.models.slice(0,4).join('\n') : p.id==='custom' ? 'Enter endpoint URL' : 'No models loaded'}
+        </div>
+      </div>`).join('');
+
+    if (Settings.selectedProvider) {
+      const p = providers.find(x => x.id === Settings.selectedProvider);
+      if (p) Settings.selectProvider(p.id, p.models || []);
+    }
+  },
+
+  selectProvider(id, models) {
+    Settings.selectedProvider = id;
+    document.querySelectorAll('.provider-card').forEach(c => c.classList.remove('selected'));
+    document.getElementById(`pcard-${id}`)?.classList.add('selected');
+
+    const isCloud  = ['openai'].includes(id);
+    const isCustom = id === 'custom';
+    document.getElementById('llm-cloud-key').style.display    = isCloud  ? '' : 'none';
+    document.getElementById('llm-custom-endpoint').style.display = isCustom ? '' : 'none';
+
+    const sel = document.getElementById('llm_model_select');
+    sel.innerHTML = '<option value="">— Select model —</option>' +
+      models.map(m => `<option value="${m}">${m}</option>`).join('');
+  },
+
+  async testApi(type) {
+    const keyEl  = document.getElementById(`${type}_key`);
+    const resEl  = document.getElementById(`${type}-test-result`);
+    const key    = keyEl.value.trim();
+    resEl.textContent = 'Testing...';
+    resEl.style.color = 'var(--text-3)';
+    const res = await App.api.post(`/api/config/test/${type}`, { api_key: key });
+    resEl.textContent = res.message;
+    resEl.style.color = res.ok ? 'var(--green)' : 'var(--red)';
+  },
+
+  async testLlm() {
+    const resEl = document.getElementById('llm-test-result');
+    resEl.textContent = 'Testing...';
+    resEl.style.color = 'var(--text-3)';
+    const res = await App.api.post('/api/llm/test', {
+      provider: Settings.selectedProvider || '',
+      model:    document.getElementById('llm_model').value.trim(),
+      endpoint: document.getElementById('llm_endpoint').value.trim(),
+      api_key:  document.getElementById('llm_api_key')?.value.trim() || '',
+    });
+    resEl.textContent = res.message;
+    resEl.style.color = res.ok ? 'var(--green)' : 'var(--red)';
+  },
+
+  browsePath(targetId) {
+    App.openPathModal((path) => {
+      document.getElementById(targetId).value = path;
+    });
+  },
+
+  async save() {
+    const tmdbKey = document.getElementById('tmdb_key').value.trim();
+    const omdbKey = document.getElementById('omdb_key').value.trim();
+    const parseExts = id => document.getElementById(id).value.split(',')
+      .map(s => s.trim()).filter(Boolean);
+
+    const cfg = {
+      source: {
+        movies_path: document.getElementById('movies_path').value.trim(),
+        tv_path:     document.getElementById('tv_path').value.trim(),
+      },
+      output: {
+        movies_path: document.getElementById('movies_out_path').value.trim() || null,
+        tv_path:     document.getElementById('tv_out_path').value.trim() || null,
+      },
+      database: { path: document.getElementById('db_path').value.trim() || 'mediamanager.db' },
+      api: {},
+      rate_limits: {
+        tmdb: {
+          requests_per_second: parseInt(document.getElementById('tmdb_rps').value) || 40,
+          daily_limit: parseInt(document.getElementById('tmdb_daily').value) || 0,
+        },
+        omdb: {
+          requests_per_second: parseInt(document.getElementById('omdb_rps').value) || 2,
+          daily_limit: parseInt(document.getElementById('omdb_daily').value) || 950,
+        },
+      },
+      identification: {
+        auto_confirm_threshold: parseInt(document.getElementById('auto_confirm_threshold').value) || 75,
+        llm_threshold: parseInt(document.getElementById('llm_threshold').value) || 50,
+      },
+      files: {
+        media_extensions: parseExts('media_extensions'),
+        subtitle_extensions: parseExts('subtitle_extensions'),
+        min_size_mb: parseInt(document.getElementById('min_size_mb').value) || 10,
+      },
+      llm: {
+        provider:    Settings.selectedProvider || 'none',
+        model:       document.getElementById('llm_model').value.trim(),
+        endpoint:    document.getElementById('llm_endpoint').value.trim(),
+        api_key:     document.getElementById('llm_api_key')?.value.trim() || '',
+        batch_size:  parseInt(document.getElementById('llm_batch').value) || 20,
+        temperature: parseFloat(document.getElementById('llm_temp').value) || 0.1,
+      },
+    };
+
+    if (tmdbKey) cfg.api.tmdb_key = tmdbKey;
+    if (omdbKey) cfg.api.omdb_key = omdbKey;
+
+    const res = await App.api.post('/api/config', cfg);
+    if (res.ok) {
+      App.toast('Settings saved!', 'success');
+      App.config = await App.api.get('/api/config');
+    } else {
+      App.toast('Save failed', 'error');
+    }
+  },
+
+  showSection(name) {
+    document.querySelectorAll('.settings-section').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.settings-nav-item').forEach(el => el.classList.remove('active'));
+    document.getElementById(`section-${name}`)?.classList.add('active');
+    document.querySelector(`[data-section="${name}"]`)?.classList.add('active');
+  },
+};
+
+document.addEventListener('DOMContentLoaded', () => Settings.init());
+</script>
+{% endblock %}

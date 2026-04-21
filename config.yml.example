@@ -1,0 +1,105 @@
+# MediaManager Configuration
+# Copy this file and fill in your values.
+
+# ─── API Keys ────────────────────────────────────────────────────────────────
+api:
+  tmdb_key: ""          # https://www.themoviedb.org/settings/api
+  omdb_key: ""          # https://www.omdbapi.com/apikey.aspx
+
+# ─── Source paths ────────────────────────────────────────────────────────────
+source:
+  # UNC path or mapped drive letter to your NAS media root
+  # Examples:
+  #   \\NAS\Media
+  #   Z:\
+  movies_path: "\\\\NAS\\Media\\Movies"
+  tv_path: "\\\\NAS\\Media\\TV Shows"
+
+# ─── Output paths (where renamed files end up) ───────────────────────────────
+# Leave blank to rename in-place (recommended for same-drive moves)
+output:
+  movies_path: ""       # defaults to source.movies_path if blank
+  tv_path: ""           # defaults to source.tv_path if blank
+
+# ─── Identification thresholds ───────────────────────────────────────────────
+identification:
+  # Score ≥ auto_confirm_threshold → auto-confirmed (Phase 1)
+  # Score ≥ llm_threshold          → sent for LLM review (Phase 2)
+  # Score <  llm_threshold         → manual review
+  auto_confirm_threshold: 75
+  llm_threshold: 50
+
+# ─── Rate limiting ───────────────────────────────────────────────────────────
+rate_limits:
+  tmdb:
+    requests_per_second: 40   # TMDB allows ~50/s; stay conservative
+    daily_limit: 0            # 0 = no daily limit enforced
+  omdb:
+    requests_per_second: 2
+    daily_limit: 950          # Free tier is 1000/day; stop at 950 to be safe
+
+# ─── File handling ───────────────────────────────────────────────────────────
+files:
+  # Media file extensions to scan (lowercase, with dot)
+  media_extensions:
+    - .mkv
+    - .mp4
+    - .avi
+    - .m4v
+    - .mov
+    - .ts
+    - .m2ts
+    - .wmv
+    - .flv
+    - .mpg
+    - .mpeg
+    - .m2v
+    - .divx
+    - .xvid
+    - .rmvb
+    - .3gp
+    - .webm
+
+  # Subtitle extensions
+  subtitle_extensions:
+    - .srt
+    - .ass
+    - .sub
+    - .ssa
+    - .vtt
+    - .idx
+    - .sup
+
+  # Keywords that suggest a file is bonus/extra content (case-insensitive)
+  extras_keywords:
+    - featurette
+    - behind the scenes
+    - making of
+    - trailer
+    - interview
+    - deleted scene
+    - deleted scenes
+    - bloopers
+    - gag reel
+    - bonus
+    - extra
+    - short film
+    - theatrical cut
+    - alternate ending
+
+# ─── Naming conventions ──────────────────────────────────────────────────────
+naming:
+  # Movie folder grouping: "decade" (only option currently)
+  movie_grouping: decade
+
+  # Movie filename template: {title} ({year})
+  # TV episode template: {show} - S{season:02d}E{episode:02d} - {title}
+  # These are not configurable yet but documented here for reference.
+
+# ─── Database ────────────────────────────────────────────────────────────────
+database:
+  path: "mediamanager.db"   # relative to project root, or absolute path
+
+# ─── Logging ─────────────────────────────────────────────────────────────────
+logging:
+  level: INFO   # DEBUG, INFO, WARNING, ERROR

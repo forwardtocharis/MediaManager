@@ -1,0 +1,388 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — MediaManager{% endblock %}
+{% block header_title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="page-title">Library Overview</div>
+    <div class="page-sub">Monitor your media identification pipeline</div>
+  </div>
+  <div class="page-actions">
+    <a href="/pipeline" class="btn btn-primary">
+      <i data-lucide="play"></i> Run Pipeline
+    </a>
+  </div>
+</div>
+
+<!-- Status cards -->
+<div class="stats-grid" id="stats-grid">
+  <div class="stat-card gray">
+    <div class="stat-icon">📂</div>
+    <div class="stat-value" id="stat-total">—</div>
+    <div class="stat-label">Total Files</div>
+  </div>
+  <div class="stat-card green">
+    <div class="stat-icon">✅</div>
+    <div class="stat-value" id="stat-identified">—</div>
+    <div class="stat-label">Identified</div>
+  </div>
+  <div class="stat-card dim">
+    <div class="stat-icon">⏳</div>
+    <div class="stat-value" id="stat-pending">—</div>
+    <div class="stat-label">Pending</div>
+  </div>
+  <div class="stat-card purple">
+    <div class="stat-icon">🤖</div>
+    <div class="stat-value" id="stat-needs-llm">—</div>
+    <div class="stat-label">Needs LLM</div>
+  </div>
+  <div class="stat-card yellow">
+    <div class="stat-icon">✏️</div>
+    <div class="stat-value" id="stat-needs-manual">—</div>
+    <div class="stat-label">Manual Review</div>
+  </div>
+  <div class="stat-card cyan">
+    <div class="stat-icon">🚀</div>
+    <div class="stat-value" id="stat-applied">—</div>
+    <div class="stat-label">Applied</div>
+  </div>
+</div>
+
+<!-- Lower row -->
+<div style="display:grid; grid-template-columns: 1fr 1fr; gap:20px; margin-bottom:28px">
+
+  <!-- Phase breakdown -->
+  <div class="card">
+    <div class="card-title">Phase Breakdown</div>
+    <div id="phase-bars" style="display:flex;flex-direction:column;gap:12px"></div>
+  </div>
+
+  <!-- Quick actions -->
+  <div class="card">
+    <div class="card-title">Quick Actions</div>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <a href="/pipeline" class="btn btn-secondary" style="justify-content:flex-start">
+        <i data-lucide="scan-line"></i> Scan NAS for new files
+      </a>
+      <a href="/pipeline" class="btn btn-secondary" style="justify-content:flex-start">
+        <i data-lucide="search"></i> Run auto-identification
+      </a>
+      <a href="/pipeline" class="btn btn-secondary" style="justify-content:flex-start">
+        <i data-lucide="bot"></i> Run LLM pass
+      </a>
+      <a href="/library?status=needs_manual" class="btn btn-secondary" style="justify-content:flex-start">
+        <i data-lucide="edit-3"></i> Review manual items
+      </a>
+      <a href="/pipeline" class="btn btn-primary" style="justify-content:flex-start; margin-top:4px">
+        <i data-lucide="folder-sync"></i> Apply changes (dry run first)
+      </a>
+    </div>
+  </div>
+
+</div>
+
+<!-- API / LLM status -->
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:28px">
+  <div class="card">
+    <div class="card-title">API Status</div>
+    <div id="api-status-detail" style="display:flex;flex-direction:column;gap:12px">
+      <div class="text-muted text-small">Loading...</div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title">LLM Providers</div>
+    <div id="llm-providers-detail" style="display:flex;flex-direction:column;gap:10px">
+      <div class="text-muted text-small">Detecting...</div>
+    </div>
+  </div>
+</div>
+
+<!-- Getting Started Checklist (Conditional) -->
+<div id="getting-started-section" style="display:none; margin-bottom:28px">
+  <div class="card" style="border-color:var(--accent); background:rgba(124,58,237,.03)">
+    <div class="card-title" style="color:var(--accent-l)">🚀 Getting Started Checklist</div>
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:16px; margin-top:10px">
+      <div id="check-paths" class="guide-check">
+        <i data-lucide="circle"></i>
+        <span>Configure Source & Output Paths</span>
+      </div>
+      <div id="check-api" class="guide-check">
+        <i data-lucide="circle"></i>
+        <span>Enter TMDB API Key</span>
+      </div>
+      <div id="check-scan" class="guide-check">
+        <i data-lucide="circle"></i>
+        <span>Run Initial NAS Scan</span>
+      </div>
+      <div id="check-llm" class="guide-check">
+        <i data-lucide="circle"></i>
+        <span>(Optional) Setup Local LLM</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Help & Documentation -->
+<div class="card" style="margin-bottom:20px">
+  <div class="card-title">Help & Documentation</div>
+  <div class="guide-grid">
+    
+    <div class="guide-item">
+      <div class="guide-hdr">
+        <i data-lucide="layers" class="text-blue"></i>
+        <span>The Pipeline Workflow</span>
+      </div>
+      <div class="guide-body">
+        MediaManager follows a 4-step process:
+        <ul>
+          <li><strong>0. Scan:</strong> Discovering video files on your network drive.</li>
+          <li><strong>1. Identify:</strong> Auto-matching via TMDB/OMDB (Fuzzy search).</li>
+          <li><strong>2. LLM:</strong> Sending tricky filenames to an AI for deep analysis.</li>
+          <li><strong>3. Apply:</strong> The final "commit" that renames and moves files.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="guide-item">
+      <div class="guide-hdr">
+        <i data-lucide="mouse-pointer-2" class="text-green"></i>
+        <span>Manual Review Tips</span>
+      </div>
+      <div class="guide-body">
+        Need to override a match?
+        <ul>
+          <li>Go to the <strong>Library</strong> and click any file.</li>
+          <li>The side panel lets you search TMDB manually.</li>
+          <li>Select the correct match and click <strong>Verify Result</strong>.</li>
+          <li>Set status to <strong>Identified</strong> to mark it ready for applying.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="guide-item">
+      <div class="guide-hdr">
+        <i data-lucide="cpu" class="text-purple"></i>
+        <span>Local AI Setup (Ollama)</span>
+      </div>
+      <div class="guide-body">
+        To use local identification:
+        <ul>
+          <li>Install <strong>Ollama</strong> or <strong>LM Studio</strong>.</li>
+          <li>Ensure the server is running on your machine.</li>
+          <li>Go to <strong>Settings → LLM</strong> and pick the provider.</li>
+          <li>Select a model (like Llama3 or Mistral) and hit Save.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="guide-item">
+      <div class="guide-hdr">
+        <i data-lucide="shield-check" class="text-cyan"></i>
+        <span>Safety & Rollback</span>
+      </div>
+      <div class="guide-body">
+        Don't worry about breaking things:
+        <ul>
+          <li>Always run <strong>Dry Run</strong> first to see the changes.</li>
+          <li>The <strong>Verify & Apply</strong> page shows a before/after view.</li>
+          <li>If you make a mistake, use <strong>Rollback</strong> in the pipeline tab.</li>
+          <li>Original files are only deleted after a successful copy-verify.</li>
+        </ul>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<style>
+.guide-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 20px;
+}
+.guide-item {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.guide-hdr {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  font-size: 14px;
+}
+.guide-hdr svg { width: 18px; height: 18px; }
+.guide-body {
+  font-size: 12.5px;
+  color: var(--text-2);
+  line-height: 1.6;
+}
+.guide-body ul {
+  padding-left: 18px;
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.guide-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-2);
+  padding: 8px 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.guide-check.done {
+  color: var(--green);
+  border-color: rgba(52,211,153,.3);
+  background: rgba(52,211,153,.05);
+}
+.guide-check.done i { color: var(--green); }
+.text-blue   { color: var(--blue); }
+.text-green  { color: var(--green); }
+.text-purple { color: var(--accent-l); }
+.text-cyan   { color: var(--cyan); }
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  Dashboard.load();
+  setInterval(() => Dashboard.load(), 15000);
+});
+
+const Dashboard = {
+  async load() {
+    const [status, providers] = await Promise.all([
+      App.api.get('/api/status'),
+      App.api.get('/api/llm/providers'),
+    ]);
+    Dashboard.renderStats(status);
+    Dashboard.renderPhases(status.phase_counts);
+    Dashboard.renderApiStatus(status.api_state);
+    Dashboard.renderProviders(providers.providers);
+    Dashboard.updateChecklist(status, providers.providers);
+  },
+
+  updateChecklist(s, providers) {
+    const sc = s.status_counts || {};
+    const total = Object.values(sc).reduce((a, b) => a + b, 0);
+    const cfg = App.config || {};
+    
+    // Show checklist if total files is 0 or if not everything is configured
+    const needsSetup = total === 0 || !cfg.api?.tmdb_key;
+    document.getElementById('getting-started-section').style.display = needsSetup ? 'block' : 'none';
+
+    // Update items
+    const setDone = (id, done) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.classList.toggle('done', done);
+      const icon = el.querySelector('i');
+      if (icon) {
+        icon.setAttribute('data-lucide', done ? 'check-circle' : 'circle');
+      }
+    };
+
+    setDone('check-paths', !!(cfg.source?.movies_path || cfg.source?.tv_path));
+    setDone('check-api', !!cfg.api?.tmdb_key);
+    setDone('check-scan', total > 0);
+    setDone('check-llm', providers.some(p => p.available));
+    
+    lucide.createIcons();
+  },
+
+  renderStats(s) {
+    const sc = s.status_counts || {};
+    const total = Object.values(sc).reduce((a, b) => a + b, 0);
+    document.getElementById('stat-total').textContent       = total.toLocaleString();
+    document.getElementById('stat-identified').textContent  = (sc.identified || 0).toLocaleString();
+    document.getElementById('stat-pending').textContent     = (sc.pending || 0).toLocaleString();
+    document.getElementById('stat-needs-llm').textContent   = (sc.needs_llm || 0).toLocaleString();
+    document.getElementById('stat-needs-manual').textContent= (sc.needs_manual || 0).toLocaleString();
+    document.getElementById('stat-applied').textContent     = (sc.applied || 0).toLocaleString();
+
+    const reviewCount = (sc.needs_llm||0) + (sc.needs_manual||0);
+    const badge = document.getElementById('sidebar-needs-review');
+    if (reviewCount > 0) {
+      badge.textContent = reviewCount > 99 ? '99+' : reviewCount;
+      badge.style.display = '';
+    } else {
+      badge.style.display = 'none';
+    }
+  },
+
+  renderPhases(pc) {
+    const total = Object.values(pc).reduce((a, b) => a + b, 0) || 1;
+    const phases = [
+      { key: '0', label: 'Unprocessed', color: 'var(--text-4)' },
+      { key: '1', label: 'Auto-identified', color: 'var(--green)' },
+      { key: '2', label: 'LLM-identified', color: 'var(--accent-l)' },
+      { key: '3', label: 'Manually identified', color: 'var(--cyan)' },
+    ];
+    const el = document.getElementById('phase-bars');
+    el.innerHTML = phases.map(p => {
+      const count = pc[p.key] || 0;
+      const pct = ((count / total) * 100).toFixed(1);
+      return `
+        <div>
+          <div style="display:flex;justify-content:space-between;margin-bottom:5px;font-size:12px">
+            <span style="color:var(--text-2)">${p.label}</span>
+            <span style="color:var(--text-3)">${count.toLocaleString()} <span style="color:var(--text-4)">(${pct}%)</span></span>
+          </div>
+          <div class="progress-track" style="height:5px">
+            <div style="width:${pct}%;height:100%;background:${p.color};border-radius:2px;transition:width .4s ease"></div>
+          </div>
+        </div>`;
+    }).join('');
+  },
+
+  renderApiStatus(state) {
+    const el = document.getElementById('api-status-detail');
+    const apis = ['tmdb', 'omdb'];
+    el.innerHTML = apis.map(name => {
+      const s = state[name] || {};
+      const paused = s.paused;
+      const count  = s.requests_today ?? '—';
+      return `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius-sm)">
+          <div>
+            <div style="font-weight:600;font-size:13px">${name.toUpperCase()}</div>
+            <div style="font-size:11px;color:var(--text-3);">${count} requests today</div>
+            ${paused ? `<div style="font-size:11px;color:var(--yellow);margin-top:2px">⚠ Paused: ${s.pause_reason||''}</div>` : ''}
+          </div>
+          <div style="display:flex;gap:6px;align-items:center">
+            <span class="badge ${paused ? 'badge-needs_manual' : 'badge-identified'}">${paused ? 'Paused' : 'Active'}</span>
+            ${paused
+              ? `<button class="btn btn-success btn-sm" onclick="App.resumeApi('${name}')">Resume</button>`
+              : `<button class="btn btn-ghost btn-sm" onclick="App.pauseApi('${name}')"><i data-lucide="pause"></i></button>`}
+          </div>
+        </div>`;
+    }).join('');
+    lucide.createIcons();
+  },
+
+  renderProviders(providers) {
+    const el = document.getElementById('llm-providers-detail');
+    const cfg = App.config?.llm || {};
+    el.innerHTML = providers.filter(p => p.id !== 'custom').map(p => {
+      const isActive = cfg.provider === p.id && p.available;
+      const sel = cfg.provider === p.id ? 'style="border-color:var(--accent);background:rgba(124,58,237,.08)"' : '';
+      return `
+        <div style="padding:10px 12px;background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius-sm);${sel ? 'border-color:var(--accent)' : ''}">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+            <span style="font-weight:600;font-size:13px">${p.label}</span>
+            <span style="font-size:11px;font-weight:600;color:${p.available ? 'var(--green)' : 'var(--text-4)'}">${p.available ? '● Online' : '○ Offline'}</span>
+          </div>
+          ${p.models.length ? `<div style="font-size:11px;color:var(--text-3)">${p.models.slice(0,3).join(', ')}${p.models.length>3?` +${p.models.length-3} more`:''}</div>` : '<div style="font-size:11px;color:var(--text-4)">No models loaded</div>'}
+          ${isActive ? '<div style="font-size:11px;color:var(--accent-l);margin-top:4px;font-weight:600">▶ Active provider</div>' : ''}
+        </div>`;
+    }).join('');
+  }
+};
+</script>
+{% endblock %}

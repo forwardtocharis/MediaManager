@@ -1,0 +1,400 @@
+{% extends "base.html" %}
+{% block title %}Pipeline — MediaManager{% endblock %}
+{% block header_title %}Pipeline{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="page-title">Pipeline</div>
+    <div class="page-sub">Run each phase independently with live progress</div>
+  </div>
+</div>
+
+<div class="phase-grid">
+
+  <!-- Phase 0: Scan -->
+  <div class="phase-card" id="card-scan">
+    <div class="phase-header">
+      <div class="phase-info">
+        <div class="phase-num">0</div>
+        <div>
+          <div class="phase-title">Scan NAS</div>
+          <div class="phase-desc">Walk source paths, discover all media and subtitle files, populate the database. Read-only — no files are moved.</div>
+        </div>
+      </div>
+      <button class="btn btn-primary" id="btn-scan" onclick="Pipeline.startScan()">
+        <i data-lucide="scan-line"></i> Start Scan
+      </button>
+    </div>
+    <div class="progress-section" id="progress-scan" style="display:none">
+      <div class="progress-header">
+        <span style="font-size:13px;font-weight:600" id="scan-headline">Scanning...</span>
+        <span id="scan-pct" class="text-muted text-small"></span>
+      </div>
+      <div class="progress-bar-wrap">
+        <div class="progress-track"><div class="progress-fill" id="scan-bar" style="width:0%"></div></div>
+        <div class="progress-meta"><span id="scan-meta-l"></span><span id="scan-meta-r"></span></div>
+      </div>
+      <div class="log-output" id="log-scan"></div>
+    </div>
+  </div>
+
+  <!-- Phase 1: Identify -->
+  <div class="phase-card" id="card-identify">
+    <div class="phase-header">
+      <div class="phase-info">
+        <div class="phase-num">1</div>
+        <div>
+          <div class="phase-title">Auto-Identify</div>
+          <div class="phase-desc">Match files against TMDB and OMDB using fuzzy title/year scoring. High-confidence matches are confirmed automatically.</div>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end">
+        <button class="btn btn-primary" id="btn-identify" onclick="Pipeline.startIdentify()">
+          <i data-lucide="search"></i> Identify
+        </button>
+        <div style="display:flex;align-items:center;gap:8px">
+          <label style="font-size:12px;color:var(--text-3)">Limit</label>
+          <input type="number" class="form-input" id="identify-limit" placeholder="All" style="width:80px;padding:5px 8px">
+        </div>
+      </div>
+    </div>
+    <div class="progress-section" id="progress-identify" style="display:none">
+      <div class="progress-header">
+        <span style="font-size:13px;font-weight:600" id="identify-headline">Identifying...</span>
+        <span id="identify-pct" class="text-muted text-small"></span>
+      </div>
+      <div class="progress-bar-wrap">
+        <div class="progress-track"><div class="progress-fill" id="identify-bar" style="width:0%"></div></div>
+        <div class="progress-meta"><span id="identify-meta-l"></span><span id="identify-meta-r"></span></div>
+      </div>
+      <div class="log-output" id="log-identify"></div>
+    </div>
+  </div>
+
+  <!-- Phase 2: LLM -->
+  <div class="phase-card" id="card-llm">
+    <div class="phase-header">
+      <div class="phase-info">
+        <div class="phase-num">2</div>
+        <div>
+          <div class="phase-title">LLM Identification</div>
+          <div class="phase-desc">Send low-confidence files to a local or cloud LLM. Results are re-validated against TMDB automatically.</div>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end">
+        <button class="btn btn-primary" id="btn-llm" onclick="Pipeline.startLlm()">
+          <i data-lucide="bot"></i> Run LLM Pass
+        </button>
+        <div id="llm-provider-info" class="text-muted" style="font-size:11px;text-align:right"></div>
+      </div>
+    </div>
+    <div id="llm-not-configured" style="padding:12px 16px;background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.2);border-radius:var(--radius-sm);font-size:13px;color:var(--yellow);display:none">
+      <i data-lucide="alert-triangle" style="width:14px;vertical-align:middle"></i>
+      No LLM provider configured. Go to <a href="/settings" style="color:var(--accent-l)">Settings → LLM</a> to set one up.
+    </div>
+    <div class="progress-section" id="progress-llm" style="display:none">
+      <div class="progress-header">
+        <span style="font-size:13px;font-weight:600" id="llm-headline">Running LLM pass...</span>
+        <span id="llm-pct" class="text-muted text-small"></span>
+      </div>
+      <div class="progress-bar-wrap">
+        <div class="progress-track"><div class="progress-fill" id="llm-bar" style="width:0%"></div></div>
+        <div class="progress-meta"><span id="llm-meta-l"></span><span id="llm-meta-r"></span></div>
+      </div>
+      <div class="log-output" id="log-llm"></div>
+    </div>
+  </div>
+
+  <!-- Phase 3: Apply -->
+  <div class="phase-card" id="card-apply">
+    <div class="phase-header">
+      <div class="phase-info">
+        <div class="phase-num">3</div>
+        <div>
+          <div class="phase-title">Apply Changes</div>
+          <div class="phase-desc">Rename and move identified files to their target paths, generate NFO sidecar files. Always preview with Dry Run first.</div>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end">
+        <div style="display:flex;gap:8px">
+          <a href="/verify" class="btn btn-primary">
+            <i data-lucide="eye"></i> Review &amp; Apply
+          </a>
+          <button class="btn btn-secondary" onclick="Pipeline.startApply(true)">
+            <i data-lucide="eye"></i> Quick Dry Run
+          </button>
+          <button class="btn btn-danger" onclick="Pipeline.confirmApply()">
+            <i data-lucide="folder-sync"></i> Apply All
+          </button>
+        </div>
+        <div style="display:flex;gap:12px;font-size:12px;color:var(--text-2)">
+          <label style="display:flex;gap:5px;align-items:center;cursor:pointer">
+            <input type="checkbox" class="checkbox" id="apply-ph1" checked> Phase 1
+          </label>
+          <label style="display:flex;gap:5px;align-items:center;cursor:pointer">
+            <input type="checkbox" class="checkbox" id="apply-ph2" checked> Phase 2
+          </label>
+          <label style="display:flex;gap:5px;align-items:center;cursor:pointer">
+            <input type="checkbox" class="checkbox" id="apply-ph3" checked> Phase 3
+          </label>
+        </div>
+      </div>
+    </div>
+    <div class="progress-section" id="progress-apply" style="display:none">
+      <div class="progress-header">
+        <span style="font-size:13px;font-weight:600" id="apply-headline">Applying...</span>
+        <span id="apply-pct" class="text-muted text-small"></span>
+      </div>
+      <div class="progress-bar-wrap">
+        <div class="progress-track"><div class="progress-fill" id="apply-bar" style="width:0%"></div></div>
+        <div class="progress-meta"><span id="apply-meta-l"></span><span id="apply-meta-r"></span></div>
+      </div>
+      <div class="log-output" id="log-apply"></div>
+    </div>
+  </div>
+
+  <!-- Rollback -->
+  <div class="phase-card">
+    <div class="phase-header">
+      <div class="phase-info">
+        <div class="phase-num" style="background:linear-gradient(135deg,var(--red),#7f1d1d)">↩</div>
+        <div>
+          <div class="phase-title">Rollback</div>
+          <div class="phase-desc">Reverse all applied file moves using the operation manifest. Files are moved back to their original locations.</div>
+        </div>
+      </div>
+      <button class="btn btn-danger" onclick="Pipeline.confirmRollback()">
+        <i data-lucide="rotate-ccw"></i> Rollback All
+      </button>
+    </div>
+    <div id="manifest-preview" style="font-size:12px;color:var(--text-3);margin-top:4px">
+      <a href="#" onclick="Pipeline.loadManifest();return false" style="color:var(--accent-l)">View operation manifest →</a>
+    </div>
+  </div>
+
+</div>
+
+<!-- Confirm Apply Modal -->
+<div class="modal-overlay" id="confirm-apply-modal">
+  <div class="modal" style="width:420px">
+    <div class="modal-header">
+      <span class="modal-title" style="color:var(--red)">⚠ Confirm Apply</span>
+      <button class="btn btn-ghost btn-sm" onclick="Pipeline.closeConfirm()"><i data-lucide="x"></i></button>
+    </div>
+    <div class="modal-body" style="color:var(--text-2);line-height:1.6;font-size:13px">
+      <p>This will <strong style="color:var(--text)">rename and move files</strong> on your NAS. This operation uses copy-verify-delete for safety, but please ensure you have a backup.</p>
+      <p style="margin-top:12px">Run a <strong>Dry Run</strong> first to preview all changes before applying.</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="Pipeline.closeConfirm()">Cancel</button>
+      <button class="btn btn-danger" onclick="Pipeline.startApply(false); Pipeline.closeConfirm()">
+        <i data-lucide="folder-sync"></i> Apply for Real
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+const Pipeline = {
+  async init() {
+    const cfg = App.config;
+    const llmCfg = cfg?.llm || {};
+    const provider = llmCfg.provider;
+    const info = document.getElementById('llm-provider-info');
+    if (provider && provider !== 'none') {
+      info.textContent = `Provider: ${provider} · ${llmCfg.model || 'no model'}`;
+      document.getElementById('llm-not-configured').style.display = 'none';
+    } else {
+      document.getElementById('llm-not-configured').style.display = '';
+      info.textContent = '';
+    }
+  },
+
+  setButtonRunning(btnId, running) {
+    const btn = document.getElementById(btnId);
+    if (!btn) return;
+    btn.disabled = running;
+    btn.innerHTML = running
+      ? '<span class="running-dot"></span> Running...'
+      : btn.dataset.orig || btn.innerHTML;
+    if (!running && btn.dataset.orig) btn.innerHTML = btn.dataset.orig;
+  },
+
+  startScan() {
+    if (!document.getElementById('btn-scan').dataset.orig)
+      document.getElementById('btn-scan').dataset.orig = document.getElementById('btn-scan').innerHTML;
+    Pipeline.setButtonRunning('btn-scan', true);
+    document.getElementById('progress-scan').style.display = '';
+    Pipeline.clearLog('log-scan');
+    Pipeline.runJob('/api/jobs/scan', {}, {
+      bar: 'scan-bar', pctEl: 'scan-pct', headEl: 'scan-headline',
+      metaL: 'scan-meta-l', metaR: 'scan-meta-r', logEl: 'log-scan',
+      btnId: 'btn-scan',
+    });
+  },
+
+  startIdentify() {
+    const limit = parseInt(document.getElementById('identify-limit').value) || null;
+    if (!document.getElementById('btn-identify').dataset.orig)
+      document.getElementById('btn-identify').dataset.orig = document.getElementById('btn-identify').innerHTML;
+    Pipeline.setButtonRunning('btn-identify', true);
+    document.getElementById('progress-identify').style.display = '';
+    Pipeline.clearLog('log-identify');
+    Pipeline.runJob('/api/jobs/identify', { limit }, {
+      bar: 'identify-bar', pctEl: 'identify-pct', headEl: 'identify-headline',
+      metaL: 'identify-meta-l', metaR: 'identify-meta-r', logEl: 'log-identify',
+      btnId: 'btn-identify',
+    });
+  },
+
+  startLlm() {
+    if (!document.getElementById('btn-llm').dataset.orig)
+      document.getElementById('btn-llm').dataset.orig = document.getElementById('btn-llm').innerHTML;
+    Pipeline.setButtonRunning('btn-llm', true);
+    document.getElementById('progress-llm').style.display = '';
+    Pipeline.clearLog('log-llm');
+    Pipeline.runJob('/api/jobs/llm', {}, {
+      bar: 'llm-bar', pctEl: 'llm-pct', headEl: 'llm-headline',
+      metaL: 'llm-meta-l', metaR: 'llm-meta-r', logEl: 'log-llm',
+      btnId: 'btn-llm',
+    });
+  },
+
+  getPhases() {
+    const phases = [];
+    if (document.getElementById('apply-ph1').checked) phases.push('1');
+    if (document.getElementById('apply-ph2').checked) phases.push('2');
+    if (document.getElementById('apply-ph3').checked) phases.push('3');
+    return phases.length ? phases : ['1'];
+  },
+
+  startApply(dry_run) {
+    document.getElementById('progress-apply').style.display = '';
+    Pipeline.clearLog('log-apply');
+    const phases = Pipeline.getPhases();
+    Pipeline.runJob('/api/jobs/apply', { dry_run, phases }, {
+      bar: 'apply-bar', pctEl: 'apply-pct', headEl: 'apply-headline',
+      metaL: 'apply-meta-l', metaR: 'apply-meta-r', logEl: 'log-apply',
+    });
+    if (dry_run) App.toast('Running dry run preview...', 'info');
+  },
+
+  confirmApply() {
+    document.getElementById('confirm-apply-modal').classList.add('open');
+    lucide.createIcons();
+  },
+
+  closeConfirm() {
+    document.getElementById('confirm-apply-modal').classList.remove('open');
+  },
+
+  async confirmRollback() {
+    if (!confirm('Are you sure you want to roll back all applied changes? Files will be moved back to original locations.')) return;
+    const res = await App.api.post('/api/rollback', { dry_run: false });
+    App.toast(`Rolled back ${res.rolled_back || 0} operations`, 'warning');
+  },
+
+  async loadManifest() {
+    const data = await App.api.get('/api/manifest');
+    const ops = data.operations || [];
+    const el = document.getElementById('manifest-preview');
+    if (!ops.length) { el.innerHTML = '<span class="text-muted">No operations in manifest.</span>'; return; }
+    el.innerHTML = `<div style="margin-top:8px;font-size:12px;max-height:180px;overflow-y:auto;background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px">
+      ${ops.slice(0,30).map(op =>
+        `<div style="display:flex;gap:8px;padding:3px 0;border-bottom:1px solid var(--border)">
+          <span style="color:var(--text-4);flex-shrink:0">${op.timestamp?.substring(0,10)||''}</span>
+          <span style="color:var(--text-3);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${op.new_path}">${op.operation_type}: ${op.new_path}</span>
+        </div>`).join('')}
+      ${ops.length > 30 ? `<div style="color:var(--text-4);padding-top:4px">+${ops.length-30} more operations</div>` : ''}
+    </div>`;
+  },
+
+  runJob(url, body, els) {
+    fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                 body: JSON.stringify(body) })
+      .then(r => r.json())
+      .then(data => {
+        const jobId = data.job_id;
+        const es = new EventSource(`/stream/${jobId}`);
+        es.onmessage = (e) => {
+          const msg = JSON.parse(e.data);
+          Pipeline.handleEvent(msg, els);
+        };
+        es.onerror = () => {
+          es.close();
+          if (els.btnId) Pipeline.setButtonRunning(els.btnId, false);
+          App.toast('Connection lost', 'error');
+        };
+      })
+      .catch(err => {
+        App.toast('Failed to start job: ' + err, 'error');
+        if (els.btnId) Pipeline.setButtonRunning(els.btnId, false);
+      });
+  },
+
+  handleEvent(msg, els) {
+    if (msg.type === 'log') {
+      Pipeline.appendLog(els.logEl, msg.message, msg.level);
+    }
+    if (msg.type === 'progress') {
+      const pct = msg.total > 0 ? Math.round((msg.current / msg.total) * 100) : 0;
+      document.getElementById(els.bar).style.width = pct + '%';
+      document.getElementById(els.pctEl).textContent = `${pct}%`;
+      document.getElementById(els.metaL).textContent = msg.filename ? `Processing: ${msg.filename}` : '';
+      document.getElementById(els.metaR).textContent = `${msg.current} / ${msg.total}`;
+      if (msg.result) {
+        const color = { identified:'var(--green)', confirmed:'var(--green)',
+                        needs_llm:'var(--accent-l)', needs_manual:'var(--yellow)',
+                        skipped:'var(--text-4)', error:'var(--red)' }[msg.result] || 'var(--text-2)';
+        Pipeline.appendLog(els.logEl,
+          `${msg.filename} → <span style="color:${color}">${msg.result}${msg.confidence ? ` (${msg.confidence}%)` : ''}</span>`,
+          'info');
+      }
+    }
+    if (msg.type === 'stats') {
+      Pipeline.appendLog(els.logEl,
+        `Found: ${msg.media_new} new media, ${msg.media_existing} existing, ${msg.subtitles} subtitles`, 'info');
+    }
+    if (msg.type === 'complete') {
+      document.getElementById(els.bar).style.width = '100%';
+      Pipeline.appendLog(els.logEl, 'Complete!', 'success');
+      if (els.headEl) document.getElementById(els.headEl).textContent = 'Complete';
+      if (els.btnId) {
+        Pipeline.setButtonRunning(els.btnId, false);
+        const btn = document.getElementById(els.btnId);
+        if (btn && btn.dataset.orig) btn.innerHTML = btn.dataset.orig;
+      }
+      lucide.createIcons();
+    }
+    if (msg.type === 'done') {
+      if (els.btnId) Pipeline.setButtonRunning(els.btnId, false);
+    }
+    if (msg.type === 'error') {
+      Pipeline.appendLog(els.logEl, msg.message, 'error');
+      if (els.btnId) Pipeline.setButtonRunning(els.btnId, false);
+    }
+  },
+
+  appendLog(logId, msg, level = 'info') {
+    const el = document.getElementById(logId);
+    if (!el) return;
+    const now = new Date().toLocaleTimeString('en-US', { hour12: false });
+    const line = document.createElement('div');
+    line.className = `log-line ${level}`;
+    line.innerHTML = `<span class="log-time">${now}</span><span class="log-msg">${msg}</span>`;
+    el.appendChild(line);
+    el.scrollTop = el.scrollHeight;
+  },
+
+  clearLog(logId) {
+    const el = document.getElementById(logId);
+    if (el) el.innerHTML = '';
+  },
+};
+
+document.addEventListener('DOMContentLoaded', () => {
+  Pipeline.init();
+});
+</script>
+{% endblock %}
