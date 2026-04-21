@@ -183,7 +183,7 @@ def import_from_llm(
             continue
 
         # Re-validate against TMDB
-        if validate and tmdb_id:
+        if validate and tmdb_id and tmdb:
             try:
                 if confirmed_type == "movie":
                     details = tmdb.get_movie_details(tmdb_id)

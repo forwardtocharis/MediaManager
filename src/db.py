@@ -60,8 +60,7 @@ CREATE TABLE IF NOT EXISTS media_files (
     confidence       REAL    DEFAULT 0,
     phase            INTEGER DEFAULT 0,   -- 0=unprocessed, 1=auto, 2=llm, 3=manual
     status           TEXT    DEFAULT 'pending',
-    -- statuses: pending | identified | low_confidence | needs_llm | needs_manual
-    --           duplicate | applied | skipped | error
+    -- statuses: pending | identified | needs_llm | needs_manual | applied | skipped | error
 
     proposed_path    TEXT,   -- what Phase 3 will rename to
     notes            TEXT,

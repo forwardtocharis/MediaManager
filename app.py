@@ -460,6 +460,24 @@ def api_pause(api_name):
 
 # ─── API: Filesystem browser ──────────────────────────────────────────────────
 
+# Paths that must never be browsed on Linux (virtual/sensitive filesystems)
+_BLOCKED_PATH_PREFIXES = (
+    "/proc", "/sys", "/dev", "/run", "/boot",
+)
+
+
+def _is_safe_browse_path(p: Path) -> bool:
+    """Return False if the resolved path points to a sensitive system directory."""
+    try:
+        resolved = str(p.resolve())
+    except Exception:
+        return False
+    for blocked in _BLOCKED_PATH_PREFIXES:
+        if resolved == blocked or resolved.startswith(blocked + "/"):
+            return False
+    return True
+
+
 @app.route("/api/browse")
 def api_browse():
     import string
@@ -470,14 +488,18 @@ def api_browse():
             d = f"{letter}:\\"
             if Path(d).exists():
                 drives.append({"name": d, "path": d, "type": "drive"})
-        # Always offer UNC input option
         return jsonify({"entries": drives, "current": "", "parent": None})
     try:
-        p = Path(path)
+        p = Path(path).resolve()
+        if not p.is_absolute():
+            return jsonify({"error": "Path must be absolute"}), 400
+        if not _is_safe_browse_path(p):
+            return jsonify({"error": "Access to this path is not permitted"}), 403
         if not p.exists():
             return jsonify({"error": "Path not found"}), 404
         entries = [{"name": c.name, "path": str(c), "type": "directory"}
-                   for c in sorted(p.iterdir()) if c.is_dir()]
+                   for c in sorted(p.iterdir()) if c.is_dir()
+                   if _is_safe_browse_path(c)]
         parent = str(p.parent) if p.parent != p else None
         return jsonify({"entries": entries, "current": str(p), "parent": parent})
     except PermissionError:
@@ -908,7 +930,7 @@ def job_apply_selected():
     """Apply changes for a specific list of file IDs."""
     cfg = get_config()
     body = request.get_json(silent=True) or {}
-    file_ids = [int(i) for i in (body.get("file_ids") or [])]
+    file_ids = [int(i) for i in (body.get("file_ids") or [])][:500]
     dry_run  = body.get("dry_run", True)
 
     if not file_ids:

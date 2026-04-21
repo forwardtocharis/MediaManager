@@ -116,6 +116,8 @@ def detect_providers() -> list[dict]:
 def test_connection(provider: str, model: str,
                     endpoint: str = "", api_key: str = "") -> dict:
     """Send a trivial request to verify connectivity. Returns {ok, message}."""
+    if provider == "custom" and not api_key:
+        return {"ok": False, "message": "Custom endpoint requires an API key."}
     try:
         from openai import OpenAI
         base_url = _resolve_endpoint(provider, endpoint)
@@ -152,6 +154,9 @@ def run_llm_pass(
     """
     from openai import OpenAI
     from src import db
+
+    if provider == "custom" and not api_key:
+        raise ValueError("Custom LLM endpoint requires an API key.")
 
     base_url = _resolve_endpoint(provider, endpoint)
     key = api_key or _PROVIDER_DEFAULT_KEY.get(provider, "sk-placeholder")
