@@ -137,6 +137,11 @@ def safe_copy(src: Path, dst: Path, verify: bool = True) -> bool:
     If verify=True, confirms dst size matches src size before returning True.
     Does NOT delete src — caller is responsible for deletion after verification.
     Returns True on success.
+
+    Size verification (not SHA-256) is intentional: shutil.copy2 is reliable,
+    and hashing multi-GB media files doubles the I/O time. A size match is
+    sufficient to catch truncated writes caused by disk-full errors, which are
+    the only realistic failure mode here.
     """
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dst)

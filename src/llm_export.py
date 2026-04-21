@@ -143,6 +143,7 @@ def import_from_llm(
     input_csv: Path,
     tmdb: TMDBClient,
     validate: bool = True,
+    phase: int = 2,
 ) -> dict:
     """
     Read LLM-completed CSV, re-validate against TMDB, and update DB.
@@ -182,7 +183,7 @@ def import_from_llm(
             continue
 
         # Re-validate against TMDB
-        if validate and tmdb_id:
+        if validate and tmdb_id and tmdb:
             try:
                 if confirmed_type == "movie":
                     details = tmdb.get_movie_details(tmdb_id)
@@ -190,7 +191,7 @@ def import_from_llm(
                     details = tmdb.get_tv_details(tmdb_id)
 
                 if details:
-                    _apply_llm_result(media_id, row, details, phase=2)
+                    _apply_llm_result(media_id, row, details, phase=phase)
                     stats["confirmed"] += 1
                 else:
                     db.update_media_file(media_id, status="needs_manual",
@@ -201,7 +202,7 @@ def import_from_llm(
                 break
         else:
             # Accept without validation (manual import or validate=False)
-            _apply_llm_result(media_id, row, {}, phase=2)
+            _apply_llm_result(media_id, row, {}, phase=phase)
             stats["confirmed"] += 1
 
     return stats
@@ -249,7 +250,7 @@ def export_for_manual(output_csv: Path) -> int:
 
 def import_from_manual(input_csv: Path, tmdb: TMDBClient) -> dict:
     """Import manually-edited CSV. Same logic as LLM import but phase=3."""
-    return import_from_llm(input_csv, tmdb, validate=True)
+    return import_from_llm(input_csv, tmdb, validate=True, phase=3)
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────

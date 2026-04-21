@@ -44,10 +44,9 @@ def compute_proposed_paths(row, movies_output: str, tv_output: str) -> dict | No
     nfo_path, and (for TV) tvshow_nfo_path.
     Returns None if the path cannot be determined (missing title etc.)
     """
-    from pathlib import Path as _Path
     ext = row["extension"] or ".mkv"
     ctype = (row["confirmed_type"] or "movie").lower()
-    orig_parent = str(_Path(row["original_path"]).parent)
+    orig_parent = str(Path(row["original_path"]).parent)
     is_extra = bool(row["is_extra"])
 
     try:
@@ -72,7 +71,7 @@ def compute_proposed_paths(row, movies_output: str, tv_output: str) -> dict | No
             year  = row["confirmed_year"] or row.get("guessed_year") or 0
             if is_extra:
                 extra_name = _extract_extra_name(
-                    _Path(row["original_path"]).stem, title, year)
+                    Path(row["original_path"]).stem, title, year)
                 dst = build_movie_extra_path(base, title, year, extra_name, ext)
             else:
                 dst = build_movie_path(base, title, year, ext)
@@ -131,11 +130,11 @@ def run(
 
     stats = {"processed": 0, "applied": 0, "skipped": 0, "errors": 0}
 
-    # For dry-run, show a preview table and return representative stats
+    # For dry-run, show a preview table and return stats (nothing was written)
     if dry_run:
         if len(rows) <= 50:
             _show_preview_table(rows, movies_output, tv_output)
-        return {"processed": len(rows), "applied": len(rows), "skipped": 0, "errors": 0}
+        return {"processed": len(rows), "applied": 0, "skipped": 0, "errors": 0}
 
     with Progress(
         SpinnerColumn(),

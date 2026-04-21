@@ -73,11 +73,32 @@ class TestAPI(unittest.TestCase):
         mock_get.return_value = mock_resp
 
         client = OMDBClient(api_key="fake_key")
-        result = client.get_details("tt1375666")
+        # get_details searches by title — use the actual title, not an IMDb ID
+        result = client.get_details("Inception", year=2010, media_type="movie")
 
         self.assertIsNotNone(result)
         self.assertEqual(result["confirmed_title"], "Inception")
         self.assertNotIn("tmdb_id", result)
+
+    @patch("src.api.omdb.requests.get")
+    def test_omdb_search_by_imdb_id(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "Title": "Inception",
+            "Year": "2010",
+            "imdbID": "tt1375666",
+            "Type": "movie",
+            "Response": "True"
+        }
+        mock_get.return_value = mock_resp
+
+        client = OMDBClient(api_key="fake_key")
+        result = client.search_by_imdb_id("tt1375666")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["Title"], "Inception")
+        self.assertEqual(result["imdbID"], "tt1375666")
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,6 +4,7 @@ db.py — SQLite database layer for MediaManager.
 Handles schema creation, connection management, and all CRUD helpers.
 """
 
+import datetime
 import sqlite3
 import json
 from pathlib import Path
@@ -59,8 +60,7 @@ CREATE TABLE IF NOT EXISTS media_files (
     confidence       REAL    DEFAULT 0,
     phase            INTEGER DEFAULT 0,   -- 0=unprocessed, 1=auto, 2=llm, 3=manual
     status           TEXT    DEFAULT 'pending',
-    -- statuses: pending | identified | low_confidence | needs_llm | needs_manual
-    --           duplicate | applied | skipped | error
+    -- statuses: pending | identified | needs_llm | needs_manual | applied | skipped | error
 
     proposed_path    TEXT,   -- what Phase 3 will rename to
     notes            TEXT,
@@ -370,7 +370,7 @@ def get_rate_limit(api: str) -> Optional[sqlite3.Row]:
 
 def increment_request_count(api: str) -> int:
     """Increment counter, reset if new day. Returns new count."""
-    today = __import__("datetime").date.today().isoformat()
+    today = datetime.date.today().isoformat()
     with connect() as conn:
         row = conn.execute(
             "SELECT requests_today, reset_date FROM rate_limit_state WHERE api=?",
