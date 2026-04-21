@@ -131,10 +131,11 @@ def run(
 
     stats = {"processed": 0, "applied": 0, "skipped": 0, "errors": 0}
 
-    # For dry-run, show a preview table
-    if dry_run and len(rows) <= 50:
-        _show_preview_table(rows, movies_output, tv_output)
-        return stats
+    # For dry-run, show a preview table and return representative stats
+    if dry_run:
+        if len(rows) <= 50:
+            _show_preview_table(rows, movies_output, tv_output)
+        return {"processed": len(rows), "applied": len(rows), "skipped": 0, "errors": 0}
 
     with Progress(
         SpinnerColumn(),
@@ -386,8 +387,9 @@ def rollback_all(dry_run: bool = True) -> dict:
         try:
             if op["operation"] == "delete" and op["original_path"]:
                 # The original was deleted — we can't restore it from nothing
-                # unless we have a backup. Log and skip.
+                # unless we have a backup. Count as an error and log.
                 logger.warning("Cannot restore deleted original: %s", op["original_path"])
+                stats["errors"] += 1
             elif op["operation"] == "copy" and op["new_path"]:
                 new_path = Path(op["new_path"])
                 orig_path_str = op["original_path"]

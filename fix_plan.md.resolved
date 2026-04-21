@@ -1,0 +1,111 @@
+# MediaManager — Bug Fix Plan & Implementation Tracker
+
+## Overview
+
+12 issues identified in the code review, grouped by severity. Each entry has:
+- **Root cause** — what the bug actually is
+- **File & line** — exact location
+- **Fix strategy** — specific code change
+- **Status** — `[ ]` pending / `[/]` in progress / `[x]` done
+
+---
+
+## 🔴 Critical
+
+### C1 — Subtitle idempotency check queries the wrong DB table
+- **File:** `src/scanner.py:155`
+- **Root cause:** `_process_subtitle_file` calls `db.get_media_by_path()` which queries `media_files`. Subtitle files never appear there, so the guard never triggers. Every rescan re-inserts every subtitle, inflating `subtitles_new` and creating redundant upsert traffic.
+- **Fix:** Add `get_subtitle_by_path()` helper to `db.py`. Call it in `_process_subtitle_file`.
+- **Status:** `[x]` done
+
+### C2 — API keys returned in plaintext via `GET /api/config`
+- **File:** `app.py:318`
+- **Root cause:** `api_get_config()` returns the raw config dict, which contains `tmdb_key`, `omdb_key`, and `llm.api_key` in plaintext. Any user/script with network access to the server can read them.
+- **Fix:** Add `_redact_config()` helper that deep-copies the config and replaces key values with `"***"` before returning to the client. The POST save path is unaffected (it reads from the request body directly).
+- **Status:** `[x]` done
+
+### C3 — `_job_queues` dict is not thread-safe
+- **File:** `app.py:71`
+- **Root cause:** `_job_queues` is read and mutated from Flask request threads and the SSE streaming thread concurrently. The patterns `_job_queues.pop()` inside the generator and `_job_queues[job_id] = ...` inside request handlers can race.
+- **Fix:** Add `_job_queues_lock = threading.Lock()`. Wrap all reads and mutations of `_job_queues` in `with _job_queues_lock`. The queue objects themselves are already thread-safe; only the dict access needs protection.
+- **Status:** `[x]` done
+
+---
+
+## 🟠 High
+
+### H1 — `_omdb_corroborate` silently swallows `RateLimitPausedError`
+- **File:** `src/identifier.py:281`
+- **Root cause:** The broad `except Exception: return None` in `_omdb_corroborate` catches `RateLimitPausedError` (a subclass of `Exception`). The OMDB pause state is set in the DB, but the exception never reaches the caller loop, so identification continues making OMDB requests on every subsequent file.
+- **Fix:** Add `except OMDBPaused: raise` before the broad catch.
+- **Status:** `[x]` done
+
+### H2 — Rollback doesn't count unrestorable deletes as errors
+- **File:** `src/applier.py:387`
+- **Root cause:** When the manifest has a `delete` operation, the code logs a warning and skips — but neither `stats["errors"]` nor `stats["restored"]` is incremented. The caller sees an incomplete picture of rollback success.
+- **Fix:** Increment `stats["errors"] += 1` in the delete-skip branch.
+- **Status:** `[x]` done
+
+### H3 — `filename_changed` summary counter never increments
+- **File:** `app.py:857`
+- **Root cause:** Both the `path_changed` and `filename_changed` branches increment `summary["path_changed"]`. Typo — `summary["filename_changed"]` is initialized but never written.
+- **Fix:** Change the `elif filename_changed:` branch to increment `summary["filename_changed"]`.
+- **Status:** `[x]` done
+
+### H4 — Dry-run `applier.run()` always returns zero stats
+- **File:** `src/applier.py:135`
+- **Root cause:** The dry-run fast path (`if dry_run and len(rows) <= 50`) shows a preview table and returns `{processed:0, applied:0, skipped:0, errors:0}` immediately. The CLI prints misleading "0 applied" output.
+- **Fix:** Return a representative stats dict reflecting the rows that *would* be processed, rather than all-zeros. For >50 rows, the loop already runs correctly (calling `_apply_one` with `dry_run=True`).
+- **Status:** `[x]` done
+
+### H5 — `import re` inside for loop in `link_subtitles_to_media`
+- **File:** `src/scanner.py:204`
+- **Root cause:** `import re` appears inside the `for sub in unlinked:` loop. The module is cached after the first import so there's no repeat parse cost, but the attribute lookup and cache check happen on every iteration unnecessarily. More importantly, `re` is not in the module-level imports, which is misleading.
+- **Fix:** Add `import re` to the top of `scanner.py` and remove the in-loop import.
+- **Status:** `[x]` done
+
+---
+
+## 🟡 Medium
+
+### M1 — `per_page` query parameter is unbounded
+- **File:** `app.py:173`
+- **Root cause:** `per_page = int(request.args.get("per_page", 50))` — a request for `per_page=999999` would load and serialize the entire table.
+- **Fix:** Clamp: `per_page = min(max(1, int(...)), 500)`
+- **Status:** `[x]` done
+
+### M2 — `app.secret_key` is hardcoded
+- **File:** `app.py:23`
+- **Root cause:** A static string is used. All installations share the same signing key for Flask sessions, and changing it requires a code edit.
+- **Fix:** Pull from `MEDIAMANAGER_SECRET_KEY` env var, falling back to the current string so existing installs aren't broken.
+- **Status:** `[x]` done
+
+### M3 — `mutagen` and `python-dateutil` are unused dependencies
+- **File:** `requirements.txt`
+- **Root cause:** Neither package is imported anywhere in the source. Dead weight that inflates install time and supply-chain risk.
+- **Fix:** Remove both lines.
+- **Status:** `[x]` done
+
+---
+
+## 🟢 Low
+
+### L1 — `_apply_llm_result` name collision across two modules
+- **File:** `src/llm.py:204`, `src/llm_export.py:210`
+- **Root cause:** Both modules define a private function with the same name but different signatures, making tracebacks ambiguous.
+- **Fix:** Rename `llm.py`'s version to `_apply_llm_api_result`.
+- **Status:** `[x]` done
+
+---
+
+## File Change Summary
+
+| File | Changes |
+|------|---------|
+| `src/db.py` | Add `get_subtitle_by_path()` helper |
+| `src/scanner.py` | Fix subtitle idempotency table; move `import re` to top |
+| `src/identifier.py` | Re-raise `RateLimitPausedError` in `_omdb_corroborate` |
+| `src/applier.py` | Fix rollback error count; fix dry-run zero stats |
+| `src/llm.py` | Rename `_apply_llm_result` → `_apply_llm_api_result` |
+| `app.py` | Add `_redact_config`; thread-lock `_job_queues`; fix `filename_changed`; bound `per_page`; env-var secret key |
+| `requirements.txt` | Remove `mutagen`, `python-dateutil` |

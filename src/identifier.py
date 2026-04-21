@@ -280,6 +280,8 @@ def _omdb_corroborate(omdb: OMDBClient, tmdb_match: dict,
     media_type = "movie" if tmdb_match.get("confirmed_type") == "movie" else "series"
     try:
         return omdb.get_details(title, year, media_type)
+    except OMDBPaused:
+        raise  # let the caller loop handle the API pause
     except Exception:
         return None
 

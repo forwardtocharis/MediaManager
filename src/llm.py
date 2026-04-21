@@ -189,7 +189,7 @@ def run_llm_pass(
                                      notes="LLM could not identify")
                 stats["skipped"] += 1
             else:
-                file_status = _apply_llm_result(row, row_result, tmdb, db)
+                file_status = _apply_llm_api_result(row, row_result, tmdb, db)
                 if file_status == "confirmed":
                     stats["confirmed"] += 1
                 else:
@@ -201,8 +201,8 @@ def run_llm_pass(
     return stats
 
 
-def _apply_llm_result(row, result: dict, tmdb, db) -> str:
-    """Apply a single LLM result to the DB. Returns 'confirmed' or 'skipped'."""
+def _apply_llm_api_result(row, result: dict, tmdb, db) -> str:
+    """Apply a single LLM API result to the DB. Returns 'confirmed' or 'skipped'."""
     tmdb_id = result.get("tmdb_id")
     confirmed_type = (result.get("confirmed_type") or "movie").lower()
     confirmed_data = None

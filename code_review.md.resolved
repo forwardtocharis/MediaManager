@@ -1,0 +1,351 @@
+# MediaManager — Comprehensive Code Review
+
+## Executive Summary
+
+MediaManager is a well-architected Python Flask application for organizing media libraries. The codebase is clean, purposefully structured, and shows strong engineering instincts: clear separation of phases, rollback safety, rate-limit awareness, and dual CLI/web interfaces. The findings below are categorized by severity.
+
+---
+
+## Architecture Overview
+
+```
+app.py          → Flask web interface + SSE job streaming
+cli.py          → Click CLI interface (mirrors web functionality)
+src/
+  db.py         → SQLite data layer (WAL mode, context-managed connections)
+  scanner.py    → Phase 0: filesystem walk
+  identifier.py → Phase 1: TMDB/OMDB scoring
+  llm.py        → Phase 2a: local/cloud LLM identification pass
+  llm_export.py → Phase 2b: CSV export/import workflow
+  applier.py    → Phase 3: copy → verify → NFO → delete → rollback
+  api/tmdb.py   → TMDB REST client with rate limiting
+  api/omdb.py   → OMDB REST client with rate limiting
+  utils/        → filename_parser, file_utils, nfo_writer
+```
+
+---
+
+## 🔴 Critical Issues
+
+### 1. SQL Injection Risk in `api/files` and `api/verify` (`app.py:181, 744`)
+
+`sort_by` is validated against a whitelist, but `sort_dir` is used directly in an f-string without equivalent protection.
+
+```python
+# CURRENT — sort_dir is not validated:
+order_sql = f"ORDER BY {sort_by} {'DESC' if sort_dir == 'desc' else 'ASC'}"
+```
+
+While the ternary mitigates it for `sort_dir`, the pattern is fragile. More importantly, `phase_arg` in `/api/verify` is split and cast without sanitization before being interpolated as SQL placeholders — that specific path is safe, but the pattern repeats across several routes with locally-built `placeholders` strings. If any future extension forgets to regenerate placeholders correctly, injection becomes possible.
+
+**Recommendation:** Centralize the `placeholders` helper; add an assertion that `len(params) == len(phase_nums)` before every parameterized execute.
+
+---
+
+### 2. Thread-Safety of `_job_queues` Dict (`app.py:71`)
+
+```python
+_job_queues: dict[str, queue.Queue] = {}
+```
+
+This dict is read and mutated from Flask request threads and the SSE streaming thread simultaneously. Python's GIL makes individual dict operations safe, but the pattern:
+
+```python
+# stream() → generator:
+_job_queues.pop(job_id, None)  # removes while another thread may be adding
+```
+
+combined with concurrent job creation can drop events silently. Under load, two jobs finishing nearly simultaneously can race on `pop`.
+
+**Recommendation:** Wrap `_job_queues` operations in a `threading.Lock`.
+
+---
+
+### 3. `_process_subtitle_file` Checks the Wrong Table (`scanner.py:155-157`)
+
+```python
+existing = db.get_media_by_path(str(file_path))  # ← queries media_files!
+if existing:
+    return
+```
+
+This checks `media_files` instead of `subtitle_files`. A subtitle file will never be found in `media_files`, so the idempotency check for subtitles is broken — every rescan will attempt to re-insert every subtitle. The `ON CONFLICT` in `upsert_subtitle_file` prevents actual duplicate rows, but the `subtitles_new` counter will always increment, giving misleading stats.
+
+**Recommendation:**
+```python
+existing = db.get_subtitle_by_path(str(file_path))  # add this db helper
+```
+
+---
+
+### 4. API Keys Returned in Plain Text via `/api/config` (`app.py:318-320`)
+
+```python
+@app.route("/api/config", methods=["GET"])
+def api_get_config():
+    return jsonify(get_config())  # returns tmdb_key, omdb_key, llm api_key
+```
+
+Any browser or script that can reach `localhost:5000` can extract all API keys. This is especially problematic if the app is ever exposed beyond localhost.
+
+**Recommendation:** Redact secret fields before returning:
+```python
+def _redact_config(cfg: dict) -> dict:
+    import copy, re
+    c = copy.deepcopy(cfg)
+    for k in ("tmdb_key", "omdb_key", "api_key"):
+        if k in c.get("api", {}): c["api"][k] = "***"
+        if k in c.get("llm", {}): c["llm"][k] = "***"
+    return c
+```
+
+---
+
+## 🟠 High Severity Issues
+
+### 5. Dry-Run Short-Circuits Before Processing in CLI Apply (`applier.py:135-137`)
+
+```python
+if dry_run and len(rows) <= 50:
+    _show_preview_table(rows, movies_output, tv_output)
+    return stats  # ← returns {processed:0, applied:0, skipped:0, errors:0}
+```
+
+In dry-run mode the `stats` dict is returned as all-zeros (since nothing was actually processed), which is misleading. The CLI prints a "0 applied" confirmation. The web job path (`job_apply`) bypasses this by calling `_apply_one` directly, creating a behavioral inconsistency between CLI and web.
+
+**Recommendation:** Either populate stats from the preview loop, or remove the early return and always run through the main loop with dry-run checks inline.
+
+---
+
+### 6. `filename_changed` Never Increments `summary["filename_changed"]` (`app.py:856-860`)
+
+```python
+if path_changed:
+    summary["path_changed"] += 1
+elif filename_changed:
+    summary["path_changed"] += 1  # ← should be summary["filename_changed"]
+else:
+    summary["metadata_only"] += 1
+```
+
+`summary["filename_changed"]` is initialized but never incremented. Both conditions add to `path_changed`.
+
+---
+
+### 7. `import re` Inside a Loop (`scanner.py:204`)
+
+```python
+for sub in unlinked:
+    ...
+    import re  # inside loop — re-imported on every iteration
+    bare_stem = re.sub(...)
+```
+
+Import inside a loop is a Python antipattern. While Python caches module imports, it still adds overhead on each iteration for a potentially large list.
+
+**Recommendation:** Move `import re` to the top of `scanner.py` (it's already imported at module level, so this is just dead code that should be removed from the loop).
+
+---
+
+### 8. Rollback Cannot Restore Deleted Originals (`applier.py:387-390`)
+
+```python
+if op["operation"] == "delete" and op["original_path"]:
+    # The original was deleted — we can't restore it from nothing
+    logger.warning("Cannot restore deleted original: %s", op["original_path"])
+```
+
+The rollback logs the delete operation but skips it silently. The `stats["restored"]` counter isn't incremented, and `stats["errors"]` isn't either. The user gets no feedback that certain files couldn't be restored. This is the most dangerous gap in the rollback — the entire premise of the manifest depends on restoring originals.
+
+**Recommendation:** Increment `stats["errors"]` for unrestorable deletes, and surface a warning in the UI/CLI response.
+
+---
+
+### 9. `_apply_llm_result` in `llm.py` vs `llm_export.py` — Naming Collision
+
+Both `llm.py` (line 204) and `llm_export.py` (line 210) define a function named `_apply_llm_result` with different signatures. This works because they're in separate modules, but it creates confusion during debugging — a traceback pointing to `_apply_llm_result` is ambiguous.
+
+**Recommendation:** Rename one to `_apply_llm_api_result` (in `llm.py`) and `_apply_llm_csv_result` (in `llm_export.py`) for clarity.
+
+---
+
+### 10. `config.yml` Contains Production NAS Paths in the Default File
+
+```yaml
+movies_path: "\\\\NAS\\Media\\Movies"
+tv_path: "\\\\NAS\\Media\\TV Shows"
+```
+
+This could cause immediate scan attempts on first run if the user doesn't edit the config. The comment says "Copy this file", but nothing enforces that a copy is used vs. the original.
+
+**Recommendation:** Default these to `""` with a clear placeholder comment, or add a startup check that refuses to scan if paths haven't been changed from the default.
+
+---
+
+## 🟡 Medium Severity Issues
+
+### 11. `per_page` Is Not Bounded (`app.py:173`)
+
+```python
+per_page = int(request.args.get("per_page", 50))
+```
+
+A request for `per_page=100000` would load the entire database into memory for serialization.
+
+**Recommendation:** `per_page = min(max(1, int(...)), 500)`
+
+### 12. `safe_copy` Uses Size Verification, Not Hash (`file_utils.py:134-151`)
+
+Size matching is faster but can produce false positives (a truncated copy at exactly the same size is theoretically possible with some copy implementations). For a media library manager where data integrity is critical, SHA-256 verification is more appropriate.
+
+**Recommendation:** Optionally use `file_hash()` which is already defined in the same file, or at minimum document why size-only was chosen.
+
+### 13. `_PROVIDER_DEFAULT_KEY` Falls Through to `"sk-placeholder"` for Custom Endpoints (`llm.py:122`)
+
+```python
+key = api_key or _PROVIDER_DEFAULT_KEY.get(provider, "sk-placeholder")
+```
+
+If a user configures a custom endpoint that requires a real API key but leaves the field blank, it silently sends `"sk-placeholder"`, which results in an opaque auth error rather than an actionable message.
+
+**Recommendation:** Raise an explicit error if `provider == "custom"` and `api_key` is empty.
+
+### 14. `upsert_media_file` Silently Skips Updates on Conflict (`db.py:179-198`)
+
+The upsert uses `ON CONFLICT(original_path) DO UPDATE SET ...` which updates all fields. This means a rescan of an already-identified file will overwrite API-confirmed data with re-guessed data. The comment says "already-scanned files are skipped", but the `_process_media_file` in scanner.py exits early before calling upsert if the file already exists, so the upsert never fires in practice. This is safe but the db function is misleadingly named and more powerful than needed.
+
+### 15. No Input Validation on `job_apply_selected` File IDs (`app.py:883`)
+
+```python
+file_ids = [int(i) for i in (body.get("file_ids") or [])]
+```
+
+No upper bound on the number of IDs. A malformed request with thousands of IDs would launch a long-running job. Add a sanity limit (e.g., 500).
+
+### 16. `_omdb_corroborate` Catches All Exceptions Silently (`identifier.py:283`)
+
+```python
+try:
+    return omdb.get_details(title, year, media_type)
+except Exception:
+    return None
+```
+
+A `RateLimitPausedError` raised by OMDB should propagate up to stop identification. Instead it's swallowed, the OMDB pause goes undetected, and the API continues to be called on subsequent files.
+
+**Recommendation:** Explicitly re-raise `RateLimitPausedError`:
+```python
+except RateLimitPausedError:
+    raise
+except Exception:
+    return None
+```
+
+### 17. `duplicate` Status Referenced in Comments but Not in Workflow (`db.py:62`)
+
+The schema comment lists `duplicate` as a valid status but `identifier.py` sets the status to the current value (e.g., `identified`) and separately records a duplicate group. The `duplicate` status is never actually set. Either remove it from the comment or implement it.
+
+---
+
+## 🟢 Low Severity / Code Quality Issues
+
+### 18. `mutagen` and `python-dateutil` in Requirements, Unused
+
+```
+mutagen>=1.47.0
+python-dateutil>=2.9.0
+```
+
+Neither appears anywhere in the source. Dead dependencies that inflate the install and could create supply-chain risk.
+
+### 19. `from pathlib import Path as _Path` Alias Inside Function (`app.py:764`, `applier.py:47`)
+
+```python
+from pathlib import Path as _Path  # inside function body
+```
+
+`Path` is already imported at module level in `applier.py`. The alias `_Path` inside functions exists presumably to avoid name collision, but it's unnecessary — there's no local variable named `Path`. Move to module-level import.
+
+### 20. Magic Numbers for Confidence Thresholds Without Constants
+
+The weights `W_TITLE=40, W_YEAR=20, W_TYPE=20, W_CORROBORATE=20` are defined as module-level constants in `identifier.py` (good), but the scoring function `_tmdb_search` hard-caps the return at `W_TITLE + W_YEAR + W_TYPE` (80, not 100) even though the threshold check uses 75 and 50. A "perfect" TMDB score without OMDB corroboration maxes at 80, and with it, it's capped at 100. This is intentional but undocumented and confusing.
+
+**Recommendation:** Add a comment explaining the effective max per path.
+
+### 21. `test_core.py` Uses CRLF Line Endings
+
+`test_core.py` uses `\r\n` while all other Python files use `\n`. Inconsistent but not functional.
+
+### 22. `tests/test_api.py`: `test_omdb_get_details` Calls `get_details` with an IMDb ID
+
+```python
+result = client.get_details("tt1375666")  # passes imdb_id as title param
+```
+
+`get_details` forwards the first arg to `search_by_title` (using `t=` OMDB param). This would not return the correct result in a real call but passes with the mock. The test is testing the wrong method.
+
+### 23. No `__all__` Exports in `src/__init__.py`
+
+The `__init__.py` files contain only comments or a single placeholder. Adding `__all__` would make the public API explicit but is a minor style concern.
+
+### 24. `app.secret_key` Is Hardcoded (`app.py:23`)
+
+```python
+app.secret_key = "mediamanager-ui-secret"
+```
+
+Flask sessions are signed with this key. A hardcoded static key means any installation shares the same key. Should be loaded from environment or config.
+
+---
+
+## Testing Assessment
+
+| File | Coverage | Quality |
+|------|----------|---------|
+| `test_core.py` | Good unit coverage of utils + DB | Well-structured, custom runner |
+| `tests/test_pipeline.py` | Full scan → identify → apply → rollback E2E | Excellent, real filesystem temp dirs |
+| `tests/test_api.py` | TMDB search, rate-limit 429, OMDB details | Good mocking; one test error (noted above) |
+| `tests/test_app.py` | Route smoke tests | Minimal; no error path testing |
+
+**Gaps:**
+- No tests for `identifier.py` scoring logic
+- No tests for `llm.py` batch processing
+- No tests for `llm_export.py` CSV round-trip
+- No tests for `applier.py` in isolation (only via pipeline test)
+- No tests for NFO XML structure beyond basic tag checks
+- `test_app.py` doesn't test POST endpoints or error responses
+
+---
+
+## Positive Highlights
+
+- **Excellent use of WAL mode** for SQLite — critical for concurrent read/write from web + threads
+- **Rollback manifest** is well-thought-out; the `copy → verify → delete` sequence is the right order
+- **Rate limiting per API** with DB-persisted state means limits survive restarts
+- **SSE streaming** for long jobs is the correct approach vs. polling
+- **`ensure_unique_path`** prevents clobbering existing files on collision
+- **Config deep-merge** (`_deep_merge`) allows partial updates from the UI without wiping keys
+- **guessit + rapidfuzz** are well-chosen libraries for this domain
+- **Phase model** (0 → 1 → 2 → 3) provides a clean, resumable workflow
+- **Duplicate detection** is built in and integrated with the identification pipeline
+- **The verify page** (`/api/verify`) providing before/after diffs before committing is excellent UX
+
+---
+
+## Prioritized Fix List
+
+| Priority | Issue | Effort |
+|----------|-------|--------|
+| 🔴 | Subtitle idempotency check queries wrong table | Low |
+| 🔴 | API keys exposed via GET /api/config | Low |
+| 🔴 | Thread-safety of `_job_queues` dict | Low |
+| 🟠 | `_omdb_corroborate` swallows `RateLimitPausedError` | Low |
+| 🟠 | Rollback doesn't count unrestorable deletes as errors | Low |
+| 🟠 | `filename_changed` counter never increments | Trivial |
+| 🟠 | `import re` inside for loop in `scanner.py` | Trivial |
+| 🟠 | Dry-run stats are always zeroed | Medium |
+| 🟡 | `per_page` unbounded | Trivial |
+| 🟡 | Unused dependencies (mutagen, dateutil) | Trivial |
+| 🟡 | Hardcoded `app.secret_key` | Low |
+| 🟢 | `_apply_llm_result` naming collision | Low |
+| 🟢 | Test coverage gaps (identifier, llm, llm_export) | High |

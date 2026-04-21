@@ -11,6 +11,7 @@ import queue
 import threading
 import uuid
 import webbrowser
+import os
 from pathlib import Path
 
 import yaml
@@ -20,7 +21,8 @@ from flask import (Flask, Response, jsonify, redirect, render_template,
 # ─── App setup ────────────────────────────────────────────────────────────────
 
 app = Flask(__name__)
-app.secret_key = "mediamanager-ui-secret"
+# fallback to current string if env var not set to preserve backwards compatibility
+app.secret_key = os.environ.get("MEDIAMANAGER_SECRET_KEY", "mediamanager-ui-secret")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -69,22 +71,28 @@ def init_db():
 # ─── Background job management ────────────────────────────────────────────────
 
 _job_queues: dict[str, queue.Queue] = {}
+_job_queues_lock = threading.Lock()
 
 
 def create_job() -> str:
     job_id = str(uuid.uuid4())[:8]
-    _job_queues[job_id] = queue.Queue()
+    with _job_queues_lock:
+        _job_queues[job_id] = queue.Queue()
     return job_id
 
 
 def send_event(job_id: str, event_type: str, data: dict) -> None:
-    if job_id in _job_queues:
-        _job_queues[job_id].put({"type": event_type, **data})
+    with _job_queues_lock:
+        q = _job_queues.get(job_id)
+    if q:
+        q.put({"type": event_type, **data})
 
 
 def end_job(job_id: str) -> None:
-    if job_id in _job_queues:
-        _job_queues[job_id].put(None)
+    with _job_queues_lock:
+        q = _job_queues.get(job_id)
+    if q:
+        q.put(None)
 
 
 # ─── SSE stream endpoint ──────────────────────────────────────────────────────
@@ -92,7 +100,8 @@ def end_job(job_id: str) -> None:
 @app.route("/stream/<job_id>")
 def stream(job_id):
     def generate():
-        q = _job_queues.get(job_id)
+        with _job_queues_lock:
+            q = _job_queues.get(job_id)
         if not q:
             yield f"data: {json.dumps({'type': 'error', 'message': 'Job not found'})}\n\n"
             return
@@ -101,7 +110,8 @@ def stream(job_id):
                 msg = q.get(timeout=30)
                 if msg is None:
                     yield f"data: {json.dumps({'type': 'done'})}\n\n"
-                    _job_queues.pop(job_id, None)
+                    with _job_queues_lock:
+                        _job_queues.pop(job_id, None)
                     break
                 yield f"data: {json.dumps(msg)}\n\n"
             except queue.Empty:
@@ -170,7 +180,7 @@ def api_files():
     mtype   = request.args.get("type", "all")
     search  = request.args.get("search", "").strip()
     page    = max(1, int(request.args.get("page", 1)))
-    per_page = int(request.args.get("per_page", 50))
+    per_page = min(max(1, int(request.args.get("per_page", 50))), 500)
     sort_by  = request.args.get("sort", "id")
     sort_dir = request.args.get("dir", "asc")
 
@@ -315,9 +325,19 @@ def api_tmdb_details():
 
 # ─── API: Config ──────────────────────────────────────────────────────────────
 
+def _redact_config(cfg: dict) -> dict:
+    import copy
+    c = copy.deepcopy(cfg)
+    for k in ("tmdb_key", "omdb_key"):
+        if k in c.get("api", {}) and c["api"][k]:
+            c["api"][k] = "***"
+    if "api_key" in c.get("llm", {}) and c["llm"]["api_key"]:
+        c["llm"]["api_key"] = "***"
+    return c
+
 @app.route("/api/config", methods=["GET"])
 def api_get_config():
-    return jsonify(get_config())
+    return jsonify(_redact_config(get_config()))
 
 
 @app.route("/api/config", methods=["POST"])
@@ -855,7 +875,7 @@ def api_verify():
             if path_changed:
                 summary["path_changed"] += 1
             elif filename_changed:
-                summary["path_changed"] += 1
+                summary["filename_changed"] += 1
             else:
                 summary["metadata_only"] += 1
 

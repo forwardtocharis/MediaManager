@@ -8,6 +8,7 @@ Design principles:
 """
 
 import logging
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -152,7 +153,7 @@ def _process_subtitle_file(file_path: Path, stats: dict) -> None:
     """Parse a subtitle file and upsert it into the database."""
     stats["subtitles_found"] += 1
 
-    existing = db.get_media_by_path(str(file_path))
+    existing = db.get_subtitle_by_path(str(file_path))  # query the correct table
     if existing:
         return
 
@@ -201,7 +202,6 @@ def link_subtitles_to_media() -> int:
         sub_path = Path(sub["original_path"])
         sub_stem = sub_path.stem.lower()
         # Strip language code suffix (.en, .eng, etc.)
-        import re
         bare_stem = re.sub(
             r'\.(en|eng|fr|fre|es|spa|de|ger|it|ita|pt|por|ru|rus|'
             r'zh|chi|ja|jpn|ko|kor|ar|ara|nl|dut|sv|swe|no|nor|'

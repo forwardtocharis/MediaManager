@@ -210,6 +210,14 @@ def get_media_by_path(path: str) -> Optional[sqlite3.Row]:
         ).fetchone()
 
 
+def get_subtitle_by_path(path: str) -> Optional[sqlite3.Row]:
+    """Return a subtitle_files row for the given path, or None."""
+    with connect() as conn:
+        return conn.execute(
+            "SELECT * FROM subtitle_files WHERE original_path=?", (path,)
+        ).fetchone()
+
+
 def update_media_file(media_id: int, **kwargs) -> None:
     if not kwargs:
         return
