@@ -9,7 +9,9 @@ Requires: paramiko
 
 import logging
 import posixpath
+import shlex
 from pathlib import PureWindowsPath
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +160,106 @@ class SSHSession:
         except Exception:
             pass
 
+    # ── Command execution ─────────────────────────────────────────────────────
+
+    def run_command(self, cmd: str, timeout: int = 60) -> tuple[str, str, int]:
+        """Execute a shell command via SSH. Returns (stdout, stderr, exit_code)."""
+        _, stdout, stderr = self._client.exec_command(cmd, timeout=timeout)
+        exit_code = stdout.channel.recv_exit_status()
+        return (
+            stdout.read().decode("utf-8", errors="replace"),
+            stderr.read().decode("utf-8", errors="replace"),
+            exit_code,
+        )
+
+    def check_python(self) -> Optional[str]:
+        """Return the path to python3/python on the NAS, or None if not found."""
+        for candidate in ("python3", "python"):
+            out, _, code = self.run_command(f"which {candidate}")
+            if code == 0 and out.strip():
+                return out.strip()
+        return None
+
+    def check_ffmpeg(self) -> Optional[str]:
+        """Return path to ffmpeg on the NAS, or None."""
+        out, _, code = self.run_command("which ffmpeg")
+        return out.strip() if code == 0 and out.strip() else None
+
+    def disk_free_bytes(self, posix_path: str) -> int:
+        """Return available bytes on the filesystem containing posix_path."""
+        cmd = f"df -B1 {shlex.quote(posix_path)} 2>/dev/null | tail -1 | awk '{{print $4}}'"
+        out, _, code = self.run_command(cmd)
+        if code == 0:
+            try:
+                return int(out.strip())
+            except ValueError:
+                pass
+        return 0
+
+    def compute_os_hash(self, posix_path: str,
+                        python_path: str = "python3") -> Optional[str]:
+        """Compute OpenSubtitles hash via remote Python. Returns hex string or None."""
+        script = (
+            "import struct,os\n"
+            f"p={posix_path!r}\n"
+            "bs=struct.calcsize('<q')\n"
+            "s=os.path.getsize(p)\n"
+            "h=s\n"
+            "with open(p,'rb') as f:\n"
+            "    for _ in range(65536//bs):\n"
+            "        l,=struct.unpack('<q',f.read(bs));h=(h+l)&0xFFFFFFFFFFFFFFFF\n"
+            "    f.seek(max(0,s-65536))\n"
+            "    for _ in range(65536//bs):\n"
+            "        l,=struct.unpack('<q',f.read(bs));h=(h+l)&0xFFFFFFFFFFFFFFFF\n"
+            "print('%016x'%h)\n"
+        )
+        try:
+            stdin_ch, stdout_ch, stderr_ch = self._client.exec_command(
+                f"{python_path} -", timeout=30
+            )
+            stdin_ch.write(script.encode())
+            stdin_ch.channel.shutdown_write()
+            exit_code = stdout_ch.channel.recv_exit_status()
+            if exit_code == 0:
+                result = stdout_ch.read().decode().strip()
+                if len(result) == 16:
+                    return result
+            logger.debug("Remote OS hash failed (exit %d): %s",
+                         exit_code, stderr_ch.read().decode()[:200])
+        except Exception as e:
+            logger.debug("compute_os_hash exception: %s", e)
+        return None
+
+    def compute_os_hash_sftp(self, posix_path: str) -> Optional[str]:
+        """Compute OpenSubtitles hash via SFTP (downloads 128 KB total)."""
+        import struct
+        try:
+            size = self._sftp.stat(posix_path).st_size
+            if size < 131072:
+                return None
+            bs = struct.calcsize("<q")
+            h = size
+            with self._sftp.open(posix_path, "rb") as f:
+                f.prefetch()
+                data = f.read(65536)
+                for i in range(0, 65536, bs):
+                    (l,) = struct.unpack("<q", data[i : i + bs])
+                    h = (h + l) & 0xFFFFFFFFFFFFFFFF
+                f.seek(max(0, size - 65536))
+                data = f.read(65536)
+                for i in range(0, 65536, bs):
+                    (l,) = struct.unpack("<q", data[i : i + bs])
+                    h = (h + l) & 0xFFFFFFFFFFFFFFFF
+            return "%016x" % h
+        except Exception as e:
+            logger.debug("SFTP OS hash failed: %s", e)
+            return None
+
+    def upload_file(self, local_path: str, remote_path: str) -> None:
+        """Upload a local file to the NAS via SFTP."""
+        self.makedirs(posixpath.dirname(remote_path))
+        self._sftp.put(local_path, remote_path)
+
     def test(self) -> str:
         """Verify connectivity by listing the root via SFTP and return the server banner."""
         transport = self._client.get_transport()
@@ -221,7 +323,8 @@ def session_from_config(ssh_cfg: dict) -> SSHSession:
 
 def apply_one_ssh(row, movies_output: str, tv_output: str,
                   dry_run: bool, written_show_nfos: set,
-                  session: SSHSession, debug_cb=None) -> bool:
+                  session: SSHSession, debug_cb=None,
+                  subtitle_cfg: dict | None = None) -> bool:
     """
     SSH equivalent of applier._apply_one.
     All file ops run on the NAS; only NFO content is built locally and pushed.
@@ -314,6 +417,18 @@ def apply_one_ssh(row, movies_output: str, tv_output: str,
 
     # ── Move subtitles ──
     _move_subtitles_ssh(media_id, dst_win, session)
+
+    # ── Apply queued subtitles (download + embed/sidecar on NAS) ──
+    if subtitle_cfg and subtitle_cfg.get("enabled") and not dry_run:
+        try:
+            from src.subtitles.applier import apply_subtitle_queue
+            apply_subtitle_queue(
+                media_id, dst_win, subtitle_cfg,
+                session=session, dry_run=dry_run,
+                log_cb=lambda msg, lvl="info": dbg(f"[subtitles] {msg}"),
+            )
+        except Exception as _se:
+            logger.warning("Subtitle apply failed for %s: %s", dst_win, _se)
 
     db.update_media_file(media_id, status="applied", proposed_path=dst_win)
     return True

@@ -36,6 +36,9 @@
     <div class="settings-nav-item" data-section="ssh" onclick="Settings.showSection('ssh')">
       <i data-lucide="terminal"></i> SSH / NAS
     </div>
+    <div class="settings-nav-item" data-section="subtitles" onclick="Settings.showSection('subtitles')">
+      <i data-lucide="captions"></i> Subtitles
+    </div>
     <div class="settings-nav-item" data-section="advanced" onclick="Settings.showSection('advanced')">
       <i data-lucide="bug"></i> Advanced
     </div>
@@ -311,6 +314,152 @@
       </div>
     </div>
 
+    <!-- Subtitles -->
+    <div class="settings-section" id="section-subtitles">
+      <div>
+        <div class="settings-section-title">Subtitles</div>
+        <div class="settings-section-desc">Automatically fetch and embed subtitles during the identify and apply phases.</div>
+      </div>
+
+      <!-- Master toggle -->
+      <div class="settings-card">
+        <div class="form-group">
+          <label class="form-label" style="display:flex;align-items:center;gap:10px">
+            <input type="checkbox" id="subtitles_enabled" style="width:16px;height:16px;accent-color:var(--accent)">
+            Enable subtitle fetching
+          </label>
+          <div class="form-hint">When enabled, subtitles are searched during identification and downloaded during apply.</div>
+        </div>
+      </div>
+
+      <!-- Providers -->
+      <div class="settings-card">
+        <div style="font-size:13px;font-weight:600;margin-bottom:12px">Providers</div>
+
+        <!-- OpenSubtitles.com -->
+        <div style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px">
+          <div class="form-group" style="margin-bottom:8px">
+            <label class="form-label" style="display:flex;align-items:center;gap:10px">
+              <input type="checkbox" id="sub_os_enabled" style="width:16px;height:16px;accent-color:var(--accent)"
+                     onchange="Settings.toggleProvider('os')">
+              OpenSubtitles.com
+              <a href="https://www.opensubtitles.com/consumers" target="_blank" style="color:var(--accent-l);font-size:11px">Get API key →</a>
+            </label>
+          </div>
+          <div id="sub-os-fields" style="display:none">
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Username</label>
+                <input type="text" class="form-input" id="sub_os_username" placeholder="your username">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Password</label>
+                <input type="password" class="form-input" id="sub_os_password" placeholder="(configured)">
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">API Key <span style="font-size:11px;color:var(--text-4)">(optional — leave blank for default)</span></label>
+              <input type="text" class="form-input" id="sub_os_api_key" placeholder="(optional)">
+            </div>
+          </div>
+        </div>
+
+        <!-- Subdl -->
+        <div style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px">
+          <div class="form-group" style="margin-bottom:8px">
+            <label class="form-label" style="display:flex;align-items:center;gap:10px">
+              <input type="checkbox" id="sub_subdl_enabled" style="width:16px;height:16px;accent-color:var(--accent)"
+                     onchange="Settings.toggleProvider('subdl')">
+              Subdl
+              <a href="https://subdl.com/dashboard" target="_blank" style="color:var(--accent-l);font-size:11px">Get API key →</a>
+            </label>
+          </div>
+          <div id="sub-subdl-fields" style="display:none">
+            <div class="form-group">
+              <label class="form-label">API Key</label>
+              <input type="password" class="form-input" id="sub_subdl_api_key" placeholder="(configured)">
+            </div>
+          </div>
+        </div>
+
+        <!-- Podnapisi -->
+        <div style="border:1px solid var(--border);border-radius:8px;padding:12px">
+          <div class="form-group" style="margin-bottom:0">
+            <label class="form-label" style="display:flex;align-items:center;gap:10px">
+              <input type="checkbox" id="sub_podnapisi_enabled" style="width:16px;height:16px;accent-color:var(--accent)">
+              Podnapisi
+              <span style="font-size:11px;color:var(--text-4)">free — no credentials needed</span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <!-- Languages -->
+      <div class="settings-card">
+        <div class="form-group">
+          <label class="form-label">Preferred Languages</label>
+          <div id="sub-lang-tags" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px"></div>
+          <div style="display:flex;gap:8px">
+            <select class="form-select" id="sub-lang-select" style="flex:1">
+              <option value="">— Add language —</option>
+              <option value="en">English (en)</option>
+              <option value="es">Spanish (es)</option>
+              <option value="fr">French (fr)</option>
+              <option value="de">German (de)</option>
+              <option value="it">Italian (it)</option>
+              <option value="pt">Portuguese (pt)</option>
+              <option value="nl">Dutch (nl)</option>
+              <option value="pl">Polish (pl)</option>
+              <option value="ru">Russian (ru)</option>
+              <option value="zh">Chinese (zh)</option>
+              <option value="ja">Japanese (ja)</option>
+              <option value="ko">Korean (ko)</option>
+              <option value="ar">Arabic (ar)</option>
+              <option value="tr">Turkish (tr)</option>
+              <option value="sv">Swedish (sv)</option>
+              <option value="da">Danish (da)</option>
+              <option value="fi">Finnish (fi)</option>
+              <option value="nb">Norwegian (nb)</option>
+              <option value="cs">Czech (cs)</option>
+              <option value="hu">Hungarian (hu)</option>
+            </select>
+            <button class="btn btn-secondary btn-sm" onclick="Settings.addSubLang()">
+              <i data-lucide="plus"></i> Add
+            </button>
+          </div>
+          <div class="form-hint">Subtitles will be fetched for all selected languages.</div>
+        </div>
+      </div>
+
+      <!-- Storage strategy -->
+      <div class="settings-card">
+        <div class="form-group">
+          <label class="form-label">Storage Strategy</label>
+          <select class="form-select" id="sub_strategy">
+            <option value="hybrid">Hybrid (embed first, sidecar fallback) — recommended</option>
+            <option value="sidecar">Sidecar Only (.srt next to video)</option>
+            <option value="embed">Embed Only (mux via FFmpeg)</option>
+          </select>
+          <div class="form-hint">
+            <strong>Hybrid:</strong> tries to mux the subtitle into the container (MP4/MKV) via FFmpeg.
+            Falls back to placing a .srt sidecar if FFmpeg is unavailable or muxing fails.<br>
+            FFmpeg must be installed on the NAS (SSH mode) or on this machine (local mode).
+          </div>
+        </div>
+      </div>
+
+      <!-- Test + install -->
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button class="btn btn-secondary" onclick="Settings.testSubtitles()">
+          <i data-lucide="plug"></i> Test Providers
+        </button>
+        <button class="btn btn-secondary" id="sub-install-btn" onclick="Settings.installSubliminal()">
+          <i data-lucide="download"></i> Install subliminal
+        </button>
+        <div id="sub-test-result" style="font-size:13px;white-space:pre-wrap"></div>
+      </div>
+    </div>
+
     <!-- Advanced -->
     <div class="settings-section" id="section-advanced">
       <div>
@@ -399,6 +548,25 @@ const Settings = {
 
     const adv = cfg.advanced || {};
     document.getElementById('debug_mode').checked = !!adv.debug_mode;
+
+    // Subtitles
+    const sub = cfg.subtitles || {};
+    document.getElementById('subtitles_enabled').checked = !!sub.enabled;
+    const prov = sub.providers || {};
+    const os = prov.opensubtitles || {};
+    document.getElementById('sub_os_enabled').checked = !!os.enabled;
+    document.getElementById('sub_os_username').value = os.username || '';
+    document.getElementById('sub_os_password').placeholder = os.password ? '(configured)' : 'password';
+    document.getElementById('sub_os_api_key').value = (os.api_key && os.api_key !== '***') ? os.api_key : '';
+    const subdl = prov.subdl || {};
+    document.getElementById('sub_subdl_enabled').checked = !!subdl.enabled;
+    document.getElementById('sub_subdl_api_key').placeholder = subdl.api_key ? '(configured)' : 'API key';
+    document.getElementById('sub_podnapisi_enabled').checked = !!(prov.podnapisi || {}).enabled;
+    Settings.toggleProvider('os');
+    Settings.toggleProvider('subdl');
+    Settings._subLangs = (sub.languages || ['en']).slice();
+    Settings._renderSubLangs();
+    Settings.setVal('sub_strategy', sub.storage_strategy || 'hybrid');
   },
 
   setVal(id, val) {
@@ -549,6 +717,30 @@ const Settings = {
       debug_mode: document.getElementById('debug_mode').checked,
     };
 
+    const osPass  = document.getElementById('sub_os_password').value;
+    const subdlKey = document.getElementById('sub_subdl_api_key').value;
+    const osApiKey = document.getElementById('sub_os_api_key').value.trim();
+    cfg.subtitles = {
+      enabled: document.getElementById('subtitles_enabled').checked,
+      providers: {
+        opensubtitles: {
+          enabled:  document.getElementById('sub_os_enabled').checked,
+          username: document.getElementById('sub_os_username').value.trim(),
+          ...(osPass    ? { password: osPass }      : {}),
+          ...(osApiKey  ? { api_key:  osApiKey }    : {}),
+        },
+        subdl: {
+          enabled: document.getElementById('sub_subdl_enabled').checked,
+          ...(subdlKey ? { api_key: subdlKey } : {}),
+        },
+        podnapisi: {
+          enabled: document.getElementById('sub_podnapisi_enabled').checked,
+        },
+      },
+      languages:        Settings._subLangs || ['en'],
+      storage_strategy: document.getElementById('sub_strategy').value || 'hybrid',
+    };
+
     const res = await App.api.post('/api/config', cfg);
     if (res.ok) {
       App.toast('Settings saved!', 'success');
@@ -651,6 +843,109 @@ const Settings = {
     });
     resEl.textContent = res.message;
     resEl.style.color = res.ok ? 'var(--green)' : 'var(--red)';
+  },
+
+  // ── Subtitle helpers ──────────────────────────────────────────────────────
+
+  _subLangs: ['en'],
+
+  toggleProvider(id) {
+    const map = { os: 'sub-os-fields', subdl: 'sub-subdl-fields' };
+    const checkId = { os: 'sub_os_enabled', subdl: 'sub_subdl_enabled' };
+    const fields = document.getElementById(map[id]);
+    if (fields) fields.style.display = document.getElementById(checkId[id]).checked ? '' : 'none';
+  },
+
+  _renderSubLangs() {
+    const container = document.getElementById('sub-lang-tags');
+    if (!container) return;
+    container.innerHTML = '';
+    (Settings._subLangs || []).forEach(lang => {
+      const tag = document.createElement('span');
+      tag.style.cssText = 'display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:var(--bg-3);border:1px solid var(--border);border-radius:12px;font-size:12px';
+      tag.innerHTML = `${lang} <button onclick="Settings._removeSubLang('${lang}')" style="background:none;border:none;cursor:pointer;color:var(--text-3);padding:0;line-height:1">&times;</button>`;
+      container.appendChild(tag);
+    });
+  },
+
+  _removeSubLang(lang) {
+    Settings._subLangs = (Settings._subLangs || []).filter(l => l !== lang);
+    Settings._renderSubLangs();
+  },
+
+  addSubLang() {
+    const sel = document.getElementById('sub-lang-select');
+    const val = sel.value;
+    if (!val) return;
+    if (!(Settings._subLangs || []).includes(val)) {
+      Settings._subLangs = [...(Settings._subLangs || []), val];
+      Settings._renderSubLangs();
+    }
+    sel.value = '';
+  },
+
+  async testSubtitles() {
+    const resEl = document.getElementById('sub-test-result');
+    resEl.textContent = 'Testing...';
+    resEl.style.color = 'var(--text-3)';
+
+    const osPass  = document.getElementById('sub_os_password').value;
+    const subdlKey = document.getElementById('sub_subdl_api_key').value;
+    const osApiKey = document.getElementById('sub_os_api_key').value.trim();
+
+    const payload = {
+      providers: {
+        opensubtitles: {
+          enabled:  document.getElementById('sub_os_enabled').checked,
+          username: document.getElementById('sub_os_username').value.trim(),
+          ...(osPass   ? { password: osPass }   : {}),
+          ...(osApiKey ? { api_key:  osApiKey } : {}),
+        },
+        subdl: {
+          enabled: document.getElementById('sub_subdl_enabled').checked,
+          ...(subdlKey ? { api_key: subdlKey } : {}),
+        },
+        podnapisi: { enabled: document.getElementById('sub_podnapisi_enabled').checked },
+      },
+    };
+
+    const res = await App.api.post('/api/config/test/subtitles', payload);
+    let msg = '';
+    for (const [k, v] of Object.entries(res.results || {})) {
+      msg += `${k}: ${v.ok ? '✓' : '✗'} ${v.message}\n`;
+    }
+    resEl.textContent = msg.trim() || (res.ok ? 'All OK' : 'Test failed');
+    resEl.style.color = res.ok ? 'var(--green)' : 'var(--red)';
+  },
+
+  async installSubliminal() {
+    const resEl = document.getElementById('sub-test-result');
+    const btn   = document.getElementById('sub-install-btn');
+    btn.disabled = true;
+    resEl.textContent = 'Installing subliminal...';
+    resEl.style.color = 'var(--text-3)';
+    try {
+      const { job_id } = await App.api.post('/api/jobs/install-dep', { package: 'subliminal' });
+      await new Promise((resolve) => {
+        const es = new EventSource(`/stream/${job_id}`);
+        es.onmessage = (e) => {
+          const msg = JSON.parse(e.data);
+          if (msg.type === 'log') {
+            resEl.textContent = msg.message;
+            resEl.style.color = msg.level === 'success' ? 'var(--green)'
+                              : msg.level === 'error'   ? 'var(--red)'
+                              : 'var(--text-3)';
+          }
+          if (msg.type === 'done' || msg.type === 'complete') { es.close(); resolve(msg); }
+        };
+        es.onerror = () => { es.close(); resolve(null); };
+      });
+    } catch(e) {
+      resEl.textContent = String(e);
+      resEl.style.color = 'var(--red)';
+    } finally {
+      btn.disabled = false;
+    }
   },
 };
 

@@ -66,6 +66,7 @@ def init_db():
     db.init(db_path)
     db.init_rate_limit("tmdb")
     db.init_rate_limit("omdb")
+    db.init_rate_limit_subtitle()
 
 
 # ─── Background job management ────────────────────────────────────────────────
@@ -73,6 +74,12 @@ def init_db():
 _job_queues: dict[str, queue.Queue] = {}
 _job_stop_events: dict[str, threading.Event] = {}
 _job_queues_lock = threading.Lock()
+
+# ─── Subtitle Python-missing interactive state ────────────────────────────────
+# Holds per-job choice for when the NAS has no Python interpreter.
+# Choices: 'sftp' (SFTP hash) | 'sftp_all' | 'skip' (no hash) | 'skip_all'
+_subtitle_python_choice: dict[str, str | None] = {}
+_subtitle_python_events: dict[str, threading.Event] = {}
 
 
 def create_job() -> str:
@@ -347,6 +354,12 @@ def _redact_config(cfg: dict) -> dict:
         c["llm"]["api_key"] = "***"
     if "password" in c.get("ssh", {}) and c["ssh"]["password"]:
         c["ssh"]["password"] = "***"
+    # Redact subtitle provider credentials
+    for prov in ("opensubtitles", "subdl", "podnapisi"):
+        prov_cfg = c.get("subtitles", {}).get("providers", {}).get(prov, {})
+        for secret in ("password", "api_key"):
+            if prov_cfg.get(secret):
+                prov_cfg[secret] = "***"
     return c
 
 
@@ -365,13 +378,15 @@ def _make_apply_fn(cfg: dict, debug_cb=None):
     applier._apply_one but routes to SSH when enabled.
     cleanup_fn() must be called when the job finishes to close the SSH session.
     """
-    ssh_cfg = cfg.get("ssh", {})
+    ssh_cfg      = cfg.get("ssh", {})
+    subtitle_cfg = cfg.get("subtitles", {})
     if ssh_cfg.get("enabled"):
         from src.ssh_applier import session_from_config, apply_one_ssh
         session = session_from_config(ssh_cfg)
         def apply_fn(row, movies_out, tv_out, dry_run, written_show_nfos):
             return apply_one_ssh(row, movies_out, tv_out, dry_run,
-                                 written_show_nfos, session, debug_cb=debug_cb)
+                                 written_show_nfos, session, debug_cb=debug_cb,
+                                 subtitle_cfg=subtitle_cfg)
         def cleanup():
             session.close()
         return apply_fn, cleanup
@@ -379,7 +394,8 @@ def _make_apply_fn(cfg: dict, debug_cb=None):
         from src.applier import _apply_one
         def apply_fn(row, movies_out, tv_out, dry_run, written_show_nfos):
             return _apply_one(row, movies_out, tv_out, dry_run,
-                              written_show_nfos, debug_cb=debug_cb)
+                              written_show_nfos, debug_cb=debug_cb,
+                              subtitle_cfg=subtitle_cfg)
         return apply_fn, lambda: None
 
 @app.route("/api/config", methods=["GET"])
@@ -463,11 +479,94 @@ def api_test_ssh():
         return jsonify({"ok": False, "message": str(e)})
 
 
+@app.route("/api/config/test/subtitles", methods=["POST"])
+def api_test_subtitles():
+    """Test subtitle provider credentials and optionally SSH Python availability."""
+    data = request.get_json() or {}
+    saved_sub = get_config().get("subtitles", {})
+    providers_cfg = data.get("providers") or saved_sub.get("providers", {})
+    results: dict = {}
+
+    # OpenSubtitles.com
+    os_cfg = providers_cfg.get("opensubtitles", {})
+    if os_cfg.get("enabled"):
+        user = (os_cfg.get("username") or "").strip()
+        pw   = (os_cfg.get("password") or "").strip()
+        key  = (os_cfg.get("api_key") or "").strip()
+        if not user or not pw:
+            results["opensubtitles"] = {"ok": False, "message": "Username and password required"}
+        else:
+            try:
+                import requests as _r
+                headers = {"Content-Type": "application/json",
+                           "User-Agent": "MediaManager/1.0",
+                           "Api-Key": key or "MediaManager"}
+                r = _r.post("https://api.opensubtitles.com/api/v1/login",
+                             json={"username": user, "password": pw},
+                             headers=headers, timeout=10)
+                r.raise_for_status()
+                token = r.json().get("token")
+                results["opensubtitles"] = {"ok": bool(token),
+                                             "message": "Login successful" if token else "No token returned"}
+            except Exception as e:
+                results["opensubtitles"] = {"ok": False, "message": str(e)}
+
+    # Subdl
+    subdl_cfg = providers_cfg.get("subdl", {})
+    if subdl_cfg.get("enabled"):
+        api_key = (subdl_cfg.get("api_key") or "").strip()
+        if not api_key:
+            results["subdl"] = {"ok": False, "message": "API key required"}
+        else:
+            try:
+                import requests as _r
+                r = _r.get("https://api.subdl.com/api/v1/subtitles",
+                            params={"api_key": api_key, "film_name": "The Matrix",
+                                    "type": "movie", "languages": "EN"},
+                            timeout=10)
+                r.raise_for_status()
+                results["subdl"] = {"ok": True, "message": "API key valid"}
+            except Exception as e:
+                results["subdl"] = {"ok": False, "message": str(e)}
+
+    # Podnapisi — free, no auth
+    if providers_cfg.get("podnapisi", {}).get("enabled"):
+        results["podnapisi"] = {"ok": True, "message": "No credentials required"}
+
+    # SSH Python check
+    ssh_cfg = get_config().get("ssh", {})
+    if ssh_cfg.get("enabled"):
+        try:
+            from src.ssh_applier import session_from_config
+            sess = session_from_config(ssh_cfg)
+            py = sess.check_python()
+            ff = sess.check_ffmpeg()
+            sess.close()
+            results["ssh_python"] = {"ok": bool(py), "message": py or "Python not found — SFTP hash will be used"}
+            results["ssh_ffmpeg"] = {"ok": bool(ff), "message": ff or "FFmpeg not found — embedding disabled"}
+        except Exception as e:
+            results["ssh_python"] = {"ok": False, "message": str(e)}
+
+    overall = all(v["ok"] for v in results.values()) if results else False
+    return jsonify({"ok": overall, "results": results})
+
+
+@app.route("/api/jobs/<job_id>/subtitle-python-reply", methods=["POST"])
+def job_subtitle_python_reply(job_id):
+    """Receive the user's choice when Python is missing on the NAS."""
+    choice = (request.get_json() or {}).get("choice", "sftp_all")
+    ev = _subtitle_python_events.get(job_id)
+    if ev:
+        _subtitle_python_choice[job_id] = choice
+        ev.set()
+    return jsonify({"ok": True})
+
+
 @app.route("/api/jobs/install-dep", methods=["POST"])
 def job_install_dep():
     package = (request.get_json() or {}).get("package", "").strip()
     # Allowlist — only permit packages we explicitly support installing
-    allowed = {"paramiko"}
+    allowed = {"paramiko", "subliminal", "babelfish"}
     if package not in allowed:
         return jsonify({"error": f"Package '{package}' is not in the install allowlist"}), 400
 
@@ -727,6 +826,7 @@ def job_identify():
     limit = body.get("limit")
 
     def run():
+        ssh_session = None
         try:
             from src import db as _db
             from src.api.tmdb import TMDBClient, RateLimitPausedError as TP
@@ -736,6 +836,7 @@ def job_identify():
             api_cfg = cfg.get("api", {})
             rl = cfg.get("rate_limits", {})
             ident = cfg.get("identification", {})
+            subtitle_cfg = cfg.get("subtitles", {})
             tmdb_key = api_cfg.get("tmdb_key", "").strip()
             omdb_key = api_cfg.get("omdb_key", "").strip()
 
@@ -753,6 +854,40 @@ def job_identify():
                                requests_per_second=omdb_rl.get("requests_per_second", 2))
                     if omdb_key else None)
 
+            # Open SSH session for OS hash computation if subtitles+SSH are enabled
+            sub_enabled = subtitle_cfg.get("enabled")
+            ssh_cfg = cfg.get("ssh", {})
+            ssh_python: str | None = None          # cached python path
+            python_choice_global: str | None = None  # 'sftp_all' or 'skip_all'
+
+            if sub_enabled and ssh_cfg.get("enabled"):
+                try:
+                    from src.ssh_applier import session_from_config
+                    ssh_session = session_from_config(ssh_cfg)
+                    ssh_python = ssh_session.check_python()
+                    if not ssh_python:
+                        send_event(job_id, "subtitle_python_missing", {
+                            "message": (
+                                "Python not found on NAS. Hash-based subtitle matching "
+                                "will use SFTP fallback (downloads 128 KB per file). "
+                                "To enable faster hash matching, install Python 3 from "
+                                "DSM Package Center."
+                            ),
+                            "options": ["sftp_all", "skip_all"],
+                        })
+                        # Wait up to 30 s for user choice; default → sftp_all
+                        ev = threading.Event()
+                        _subtitle_python_choice[job_id] = None
+                        _subtitle_python_events[job_id] = ev
+                        ev.wait(timeout=30)
+                        python_choice_global = _subtitle_python_choice.pop(job_id, "sftp_all") or "sftp_all"
+                        _subtitle_python_events.pop(job_id, None)
+                except Exception as e:
+                    send_event(job_id, "log", {
+                        "message": f"SSH session for subtitle hashing unavailable: {e}",
+                        "level": "warning"})
+                    ssh_session = None
+
             pending = _db.get_media_by_status("pending")
             if limit:
                 pending = pending[:int(limit)]
@@ -760,7 +895,7 @@ def job_identify():
             send_event(job_id, "log", {"message": f"Identifying {total} files...", "level": "info"})
             send_event(job_id, "progress", {"current": 0, "total": total})
 
-            identified = needs_llm = needs_manual = errors = 0
+            identified = needs_llm = needs_manual = errors = sub_queued = 0
             for i, row in enumerate(pending):
                 try:
                     result = _identify_one(
@@ -768,9 +903,27 @@ def job_identify():
                         ident.get("auto_confirm_threshold", 75),
                         ident.get("llm_threshold", 50))
                     s = result.get("status", "needs_manual")
-                    if s == "identified": identified += 1
-                    elif s == "needs_llm": needs_llm += 1
-                    else: needs_manual += 1
+                    if s == "identified":
+                        identified += 1
+                        # Queue subtitle search for newly-identified files
+                        if sub_enabled:
+                            updated_row = _db.get_media_file(row["id"])
+                            if updated_row:
+                                os_hash = _compute_hash_for_identify(
+                                    job_id, updated_row, ssh_session,
+                                    ssh_python, python_choice_global,
+                                )
+                                try:
+                                    from src.subtitles.fetcher import queue_subtitles_for_media
+                                    n = queue_subtitles_for_media(updated_row, subtitle_cfg, os_hash)
+                                    sub_queued += n
+                                except Exception as se:
+                                    logger.warning("Subtitle queue failed for %s: %s",
+                                                   row["filename"], se)
+                    elif s == "needs_llm":
+                        needs_llm += 1
+                    else:
+                        needs_manual += 1
                     send_event(job_id, "progress", {
                         "current": i + 1, "total": total,
                         "filename": row["filename"], "result": s,
@@ -782,20 +935,44 @@ def job_identify():
                     errors += 1
                     logger.warning("Identify %s: %s", row["filename"], e)
 
+            sub_msg = f", {sub_queued} subtitle(s) queued" if sub_enabled else ""
             send_event(job_id, "log", {
-                "message": f"Done — {identified} identified, {needs_llm} need LLM, {needs_manual} need manual, {errors} errors.",
+                "message": (f"Done — {identified} identified, {needs_llm} need LLM, "
+                            f"{needs_manual} need manual, {errors} errors{sub_msg}."),
                 "level": "success"})
             send_event(job_id, "complete", {
                 "identified": identified, "needs_llm": needs_llm,
-                "needs_manual": needs_manual, "errors": errors})
+                "needs_manual": needs_manual, "errors": errors,
+                "sub_queued": sub_queued})
         except Exception as e:
             send_event(job_id, "log", {"message": f"Error: {e}", "level": "error"})
             logger.error("Identify error: %s", e, exc_info=True)
         finally:
+            if ssh_session:
+                try:
+                    ssh_session.close()
+                except Exception:
+                    pass
             end_job(job_id)
 
     threading.Thread(target=run, daemon=True).start()
     return jsonify({"job_id": job_id})
+
+
+def _compute_hash_for_identify(job_id, row, ssh_session,
+                                ssh_python, python_choice_global):
+    """Compute the OpenSubtitles hash for a media file during identification."""
+    if ssh_session is None:
+        return None
+    posix = ssh_session.to_posix(row["original_path"])
+    if python_choice_global == "skip_all":
+        return None
+    if ssh_python and python_choice_global != "sftp_all":
+        h = ssh_session.compute_os_hash(posix, ssh_python)
+        if h:
+            return h
+    # Fallback: SFTP hash
+    return ssh_session.compute_os_hash_sftp(posix)
 
 
 @app.route("/api/jobs/llm", methods=["POST"])

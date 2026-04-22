@@ -103,6 +103,25 @@ CREATE TABLE IF NOT EXISTS apply_manifest (
     rolled_back_at   TEXT
 );
 
+CREATE TABLE IF NOT EXISTS subtitle_queue (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    media_id      INTEGER NOT NULL REFERENCES media_files(id) ON DELETE CASCADE,
+    provider      TEXT    NOT NULL,   -- opensubtitles | subdl | podnapisi
+    subtitle_id   TEXT,               -- provider-specific ID (file_id, sd_id, etc.)
+    language      TEXT    NOT NULL,   -- ISO 639-1 code
+    release_name  TEXT,
+    score         REAL    DEFAULT 0,
+    download_url  TEXT,               -- direct URL where available (Subdl)
+    status        TEXT    DEFAULT 'queued',
+    -- queued | downloading | embedded | sidecar | skipped | error
+    error_msg     TEXT,
+    created_at    TEXT    DEFAULT (datetime('now')),
+    updated_at    TEXT    DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_subq_media   ON subtitle_queue(media_id, status);
+CREATE INDEX IF NOT EXISTS idx_subq_lang    ON subtitle_queue(media_id, language);
+
 CREATE TABLE IF NOT EXISTS rate_limit_state (
     api              TEXT    PRIMARY KEY,
     requests_today   INTEGER DEFAULT 0,
@@ -474,3 +493,79 @@ def resolve_duplicate(dup_id: int, resolution: str) -> None:
             "UPDATE duplicates SET resolution=? WHERE id=?",
             (resolution, dup_id)
         )
+
+
+# ─── subtitle_queue helpers ───────────────────────────────────────────────────
+
+def insert_subtitle_queue(data: dict) -> int:
+    """Insert a new subtitle queue entry. Returns the row id."""
+    fields = list(data.keys())
+    placeholders = ", ".join(["?"] * len(fields))
+    col_list = ", ".join(fields)
+    sql = f"INSERT INTO subtitle_queue({col_list}) VALUES({placeholders})"
+    with connect() as conn:
+        cur = conn.execute(sql, list(data.values()))
+        return cur.lastrowid
+
+
+def get_subtitle_queue_for_media(media_id: int,
+                                  status: str | None = None) -> list[sqlite3.Row]:
+    with connect() as conn:
+        if status:
+            return conn.execute(
+                "SELECT * FROM subtitle_queue WHERE media_id=? AND status=? ORDER BY score DESC",
+                (media_id, status)
+            ).fetchall()
+        return conn.execute(
+            "SELECT * FROM subtitle_queue WHERE media_id=? ORDER BY score DESC",
+            (media_id,)
+        ).fetchall()
+
+
+def get_queued_languages(media_id: int) -> set[str]:
+    """Languages that already have a queued/applied subtitle for this media."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT language FROM subtitle_queue WHERE media_id=? "
+            "AND status IN ('queued','downloading','embedded','sidecar')",
+            (media_id,)
+        ).fetchall()
+    return {r["language"] for r in rows}
+
+
+def update_subtitle_queue(queue_id: int, **kwargs) -> None:
+    if not kwargs:
+        return
+    sets = ", ".join(f"{k}=?" for k in kwargs)
+    values = list(kwargs.values()) + [queue_id]
+    with connect() as conn:
+        conn.execute(
+            f"UPDATE subtitle_queue SET {sets}, updated_at=datetime('now') WHERE id=?",
+            values
+        )
+
+
+def get_best_subtitle_per_language(media_id: int) -> list[sqlite3.Row]:
+    """Return the highest-scoring queued entry per language for a media file."""
+    with connect() as conn:
+        return conn.execute(
+            """
+            SELECT * FROM subtitle_queue
+            WHERE media_id=? AND status='queued'
+              AND id IN (
+                SELECT id FROM subtitle_queue sq2
+                WHERE sq2.media_id=subtitle_queue.media_id
+                  AND sq2.language=subtitle_queue.language
+                  AND sq2.status='queued'
+                ORDER BY score DESC LIMIT 1
+              )
+            ORDER BY language
+            """,
+            (media_id,)
+        ).fetchall()
+
+
+def init_rate_limit_subtitle() -> None:
+    """Initialise rate-limit rows for subtitle providers."""
+    for api in ("opensubtitles", "subdl", "podnapisi"):
+        init_rate_limit(api)
