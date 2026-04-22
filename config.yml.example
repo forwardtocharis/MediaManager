@@ -10,10 +10,10 @@ api:
 source:
   # UNC path or mapped drive letter to your NAS media root
   # Examples:
-  #   \\NAS\Media
+  #   /mnt/media
   #   Z:\
-  movies_path: "\\\\NAS\\Media\\Movies"
-  tv_path: "\\\\NAS\\Media\\TV Shows"
+  movies_path: "/path/to/movies"
+  tv_path: "/path/to/tvshows"
 
 # ─── Output paths (where renamed files end up) ───────────────────────────────
 # Leave blank to rename in-place (recommended for same-drive moves)

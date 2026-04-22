@@ -333,7 +333,30 @@ def _redact_config(cfg: dict) -> dict:
             c["api"][k] = "***"
     if "api_key" in c.get("llm", {}) and c["llm"]["api_key"]:
         c["llm"]["api_key"] = "***"
+    if "password" in c.get("ssh", {}) and c["ssh"]["password"]:
+        c["ssh"]["password"] = "***"
     return c
+
+
+def _make_apply_fn(cfg: dict):
+    """
+    Return (apply_fn, cleanup_fn) where apply_fn has the same signature as
+    applier._apply_one but routes to SSH when enabled.
+    cleanup_fn() must be called when the job finishes to close the SSH session.
+    """
+    ssh_cfg = cfg.get("ssh", {})
+    if ssh_cfg.get("enabled"):
+        from src.ssh_applier import session_from_config, apply_one_ssh
+        session = session_from_config(ssh_cfg)
+        def apply_fn(row, movies_out, tv_out, dry_run, written_show_nfos):
+            return apply_one_ssh(row, movies_out, tv_out, dry_run,
+                                 written_show_nfos, session)
+        def cleanup():
+            session.close()
+        return apply_fn, cleanup
+    else:
+        from src.applier import _apply_one
+        return _apply_one, lambda: None
 
 @app.route("/api/config", methods=["GET"])
 def api_get_config():
@@ -376,6 +399,73 @@ def api_test_omdb():
         return jsonify({"ok": bool(result), "message": "Connected!" if result else "No result"})
     except Exception as e:
         return jsonify({"ok": False, "message": str(e)})
+
+
+@app.route("/api/config/test/ssh", methods=["POST"])
+def api_test_ssh():
+    try:
+        import paramiko  # noqa: F401
+    except ImportError:
+        return jsonify({"ok": False, "message": "paramiko not installed — use the Install button in SSH settings"})
+    try:
+        from src.ssh_applier import session_from_config
+        data = request.get_json() or {}
+        saved_ssh = get_config().get("ssh", {})
+        ssh_cfg = {
+            "host":     (data.get("host") or "").strip(),
+            "port":     int(data.get("port") or 22),
+            "username": (data.get("username") or "").strip(),
+            # If the UI sent an empty password, fall back to the saved one
+            "password": (data.get("password") or "").strip() or (saved_ssh.get("password") or ""),
+            "key_path": (data.get("key_path") or "").strip() or (saved_ssh.get("key_path") or ""),
+            "path_map": data.get("path_map") or saved_ssh.get("path_map") or {},
+        }
+        logger.info("SSH test: host=%s port=%s user=%s password_len=%d key_path=%r",
+                    ssh_cfg["host"], ssh_cfg["port"], ssh_cfg["username"],
+                    len(ssh_cfg["password"]), ssh_cfg["key_path"])
+        if not ssh_cfg["host"] or not ssh_cfg["username"]:
+            return jsonify({"ok": False, "message": "Host and username are required"})
+        session = session_from_config(ssh_cfg)
+        hostname = session.test()
+        session.close()
+        return jsonify({"ok": True, "message": f"Connected to {hostname}"})
+    except Exception as e:
+        logger.error("SSH test failed: %s", e, exc_info=True)
+        return jsonify({"ok": False, "message": str(e)})
+
+
+@app.route("/api/jobs/install-dep", methods=["POST"])
+def job_install_dep():
+    package = (request.get_json() or {}).get("package", "").strip()
+    # Allowlist — only permit packages we explicitly support installing
+    allowed = {"paramiko"}
+    if package not in allowed:
+        return jsonify({"error": f"Package '{package}' is not in the install allowlist"}), 400
+
+    job_id = create_job()
+
+    def run():
+        import subprocess, sys
+        try:
+            send_event(job_id, "log", {"message": f"Installing {package}...", "level": "info"})
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "install", package],
+                capture_output=True, text=True, timeout=120
+            )
+            if result.returncode == 0:
+                send_event(job_id, "log", {"message": f"{package} installed successfully.", "level": "success"})
+                send_event(job_id, "complete", {"ok": True})
+            else:
+                send_event(job_id, "log", {"message": result.stderr.strip() or "Install failed.", "level": "error"})
+                send_event(job_id, "complete", {"ok": False})
+        except Exception as e:
+            send_event(job_id, "log", {"message": str(e), "level": "error"})
+            send_event(job_id, "complete", {"ok": False})
+        finally:
+            end_job(job_id)
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify({"job_id": job_id})
 
 
 # ─── API: LLM ─────────────────────────────────────────────────────────────────
@@ -490,7 +580,8 @@ def api_browse():
                 drives.append({"name": d, "path": d, "type": "drive"})
         return jsonify({"entries": drives, "current": "", "parent": None})
     try:
-        p = Path(path).resolve()
+        # Use Path without .resolve() so UNC paths (\\server\share) are preserved
+        p = Path(path)
         if not p.is_absolute():
             return jsonify({"error": "Path must be absolute"}), 400
         if not _is_safe_browse_path(p):
@@ -500,7 +591,9 @@ def api_browse():
         entries = [{"name": c.name, "path": str(c), "type": "directory"}
                    for c in sorted(p.iterdir()) if c.is_dir()
                    if _is_safe_browse_path(c)]
-        parent = str(p.parent) if p.parent != p else None
+        # For UNC roots like \\server\share, parent should be None (can't go higher)
+        raw_parent = p.parent
+        parent = None if raw_parent == p or str(raw_parent) == str(p) else str(raw_parent)
         return jsonify({"entries": entries, "current": str(p), "parent": parent})
     except PermissionError:
         return jsonify({"error": "Permission denied"}), 403
@@ -515,6 +608,32 @@ def api_manifest():
     from src import db
     ops = db.get_manifest_ops(rolled_back=False)
     return jsonify({"operations": [dict(op) for op in ops[:200]]})
+
+
+@app.route("/api/folders/delete", methods=["POST"])
+def api_folders_delete():
+    """Delete a list of source folders supplied by the user after an apply run."""
+    body = request.get_json(silent=True) or {}
+    paths = body.get("paths", [])
+    if not isinstance(paths, list):
+        return jsonify({"error": "paths must be a list"}), 400
+
+    deleted = []
+    errors = []
+    for raw in paths:
+        p = Path(raw)
+        if not p.is_dir():
+            errors.append({"path": raw, "error": "not a directory or already gone"})
+            continue
+        try:
+            import shutil
+            shutil.rmtree(p)
+            deleted.append(str(p))
+            logger.info("User-deleted folder: %s", p)
+        except Exception as exc:
+            errors.append({"path": raw, "error": str(exc)})
+
+    return jsonify({"deleted": deleted, "errors": errors})
 
 
 @app.route("/api/rollback", methods=["POST"])
@@ -537,11 +656,17 @@ def job_scan():
             from src.scanner import scan, link_subtitles_to_media
             source = cfg.get("source", {})
             files_cfg = cfg.get("files", {})
+            scan_mode = cfg.get("scan_mode", "both")
             movies_path = source.get("movies_path", "").strip() or None
             tv_path = source.get("tv_path", "").strip() or None
 
+            if scan_mode == "movies":
+                tv_path = None
+            elif scan_mode == "tv":
+                movies_path = None
+
             if not movies_path and not tv_path:
-                send_event(job_id, "log", {"message": "No source paths configured.", "level": "error"})
+                send_event(job_id, "log", {"message": "No source paths configured for the selected scan mode.", "level": "error"})
                 return
 
             send_event(job_id, "log", {"message": "Starting scan...", "level": "info"})
@@ -710,9 +835,9 @@ def job_apply():
     tv_out     = (output.get("tv_path")     or source.get("tv_path", "")).strip()
 
     def run():
+        apply_fn, cleanup = _make_apply_fn(cfg)
         try:
             from src import db as _db
-            from src.applier import _apply_one
 
             if "all" in phases:
                 phase_nums = [1, 2, 3]
@@ -726,19 +851,24 @@ def job_apply():
                     f"AND phase IN ({placeholders}) ORDER BY id",
                     phase_nums).fetchall()
 
+            ssh_mode = cfg.get("ssh", {}).get("enabled", False)
             total = len(rows)
             send_event(job_id, "log", {
-                "message": f"{'[DRY RUN] ' if dry_run else ''}Applying {total} files...",
+                "message": f"{'[DRY RUN] ' if dry_run else ''}{'[SSH] ' if ssh_mode else ''}Applying {total} files...",
                 "level": "info"})
             send_event(job_id, "progress", {"current": 0, "total": total})
 
             applied = skipped = errors = 0
             written_show_nfos: set = set()
+            source_dirs: set = set()
             for i, row in enumerate(rows):
                 try:
-                    ok = _apply_one(row, movies_out, tv_out, dry_run, written_show_nfos)
-                    if ok: applied += 1
-                    else:  skipped += 1
+                    ok = apply_fn(row, movies_out, tv_out, dry_run, written_show_nfos)
+                    if ok:
+                        applied += 1
+                        source_dirs.add(Path(row["original_path"]).parent)
+                    else:
+                        skipped += 1
                     send_event(job_id, "progress", {
                         "current": i + 1, "total": total,
                         "filename": row["filename"],
@@ -751,10 +881,21 @@ def job_apply():
                 "message": f"Done — {applied} {'[dry] applied' if dry_run else 'applied'}, {skipped} skipped, {errors} errors.",
                 "level": "success"})
             send_event(job_id, "complete", {"applied": applied, "skipped": skipped, "errors": errors})
+
+            if not dry_run and source_dirs and not ssh_mode:
+                from src.applier import cleanup_source_folders
+                folder_result = cleanup_source_folders(source_dirs)
+                if folder_result["deleted"]:
+                    send_event(job_id, "log", {
+                        "message": f"Auto-deleted {len(folder_result['deleted'])} empty folder(s).",
+                        "level": "info"})
+                if folder_result["non_empty"]:
+                    send_event(job_id, "folder_cleanup", {"data": folder_result["non_empty"]})
         except Exception as e:
             send_event(job_id, "log", {"message": f"Error: {e}", "level": "error"})
             logger.error("Apply error: %s", e, exc_info=True)
         finally:
+            cleanup()
             end_job(job_id)
 
     threading.Thread(target=run, daemon=True).start()
@@ -944,9 +1085,9 @@ def job_apply_selected():
     job_id = create_job()
 
     def run():
+        apply_fn, cleanup = _make_apply_fn(cfg)
         try:
             from src import db as _db
-            from src.applier import _apply_one
 
             with _db.connect() as conn:
                 placeholders = ",".join("?" * len(file_ids))
@@ -955,8 +1096,9 @@ def job_apply_selected():
                     file_ids
                 ).fetchall()
 
+            ssh_mode = cfg.get("ssh", {}).get("enabled", False)
             total = len(rows)
-            label = "[DRY RUN] " if dry_run else ""
+            label = f"{'[DRY RUN] ' if dry_run else ''}{'[SSH] ' if ssh_mode else ''}"
             send_event(job_id, "log", {
                 "message": f"{label}Applying {total} selected files...",
                 "level": "info"})
@@ -964,12 +1106,16 @@ def job_apply_selected():
 
             applied = skipped = errors = 0
             written_show_nfos: set = set()
+            source_dirs: set = set()
 
             for i, row in enumerate(rows):
                 try:
-                    ok = _apply_one(row, movies_out, tv_out, dry_run, written_show_nfos)
-                    if ok: applied += 1
-                    else:  skipped += 1
+                    ok = apply_fn(row, movies_out, tv_out, dry_run, written_show_nfos)
+                    if ok:
+                        applied += 1
+                        source_dirs.add(Path(row["original_path"]).parent)
+                    else:
+                        skipped += 1
                     send_event(job_id, "progress", {
                         "current": i + 1, "total": total,
                         "filename": row["filename"],
@@ -988,10 +1134,21 @@ def job_apply_selected():
             send_event(job_id, "complete",
                        {"applied": applied, "skipped": skipped, "errors": errors,
                         "dry_run": dry_run})
+
+            if not dry_run and source_dirs and not ssh_mode:
+                from src.applier import cleanup_source_folders
+                folder_result = cleanup_source_folders(source_dirs)
+                if folder_result["deleted"]:
+                    send_event(job_id, "log", {
+                        "message": f"Auto-deleted {len(folder_result['deleted'])} empty folder(s).",
+                        "level": "info"})
+                if folder_result["non_empty"]:
+                    send_event(job_id, "folder_cleanup", {"data": folder_result["non_empty"]})
         except Exception as e:
             send_event(job_id, "log", {"message": f"Error: {e}", "level": "error"})
             logger.error("apply-selected error: %s", e, exc_info=True)
         finally:
+            cleanup()
             end_job(job_id)
 
     threading.Thread(target=run, daemon=True).start()

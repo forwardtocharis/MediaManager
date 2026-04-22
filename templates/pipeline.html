@@ -154,6 +154,23 @@
     </div>
   </div>
 
+  <!-- Folder cleanup panel (shown after apply when non-empty source folders remain) -->
+  <div class="phase-card" id="card-folder-cleanup" style="display:none">
+    <div class="phase-header">
+      <div class="phase-info">
+        <div class="phase-num" style="background:linear-gradient(135deg,var(--yellow),#78350f)">🗂</div>
+        <div>
+          <div class="phase-title">Source Folder Cleanup</div>
+          <div class="phase-desc">These folders still contain files after the apply run. Select the ones you want to delete, then click Delete Selected.</div>
+        </div>
+      </div>
+      <button class="btn btn-danger" id="btn-delete-folders" onclick="Pipeline.deleteSelectedFolders()">
+        <i data-lucide="trash-2"></i> Delete Selected
+      </button>
+    </div>
+    <div id="folder-cleanup-list" style="margin-top:12px;display:flex;flex-direction:column;gap:8px"></div>
+  </div>
+
   <!-- Rollback -->
   <div class="phase-card">
     <div class="phase-header">
@@ -198,6 +215,7 @@
 <script>
 const Pipeline = {
   async init() {
+    await App._ready;
     const cfg = App.config;
     const llmCfg = cfg?.llm || {};
     const provider = llmCfg.provider;
@@ -373,6 +391,56 @@ const Pipeline = {
     if (msg.type === 'error') {
       Pipeline.appendLog(els.logEl, msg.message, 'error');
       if (els.btnId) Pipeline.setButtonRunning(els.btnId, false);
+    }
+    if (msg.type === 'folder_cleanup') {
+      Pipeline.showFolderCleanup(msg.data);
+    }
+  },
+
+  showFolderCleanup(folders) {
+    const card = document.getElementById('card-folder-cleanup');
+    const list = document.getElementById('folder-cleanup-list');
+    list.innerHTML = '';
+    folders.forEach((folder, idx) => {
+      const id = `folder-chk-${idx}`;
+      const fileList = folder.files.map(f =>
+        `<span style="display:inline-block;background:var(--bg-3);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px;color:var(--text-3)">${f}</span>`
+      ).join(' ');
+      list.insertAdjacentHTML('beforeend', `
+        <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px">
+          <label style="display:flex;gap:10px;align-items:flex-start;cursor:pointer">
+            <input type="checkbox" class="checkbox folder-cleanup-chk" id="${id}" data-path="${folder.path}" style="margin-top:3px;flex-shrink:0">
+            <div>
+              <div style="font-size:13px;font-weight:600;color:var(--text);word-break:break-all">${folder.path}</div>
+              <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px">${fileList}</div>
+            </div>
+          </label>
+        </div>`);
+    });
+    card.style.display = '';
+    lucide.createIcons();
+  },
+
+  async deleteSelectedFolders() {
+    const checked = [...document.querySelectorAll('.folder-cleanup-chk:checked')];
+    if (!checked.length) { App.toast('No folders selected', 'warning'); return; }
+    const paths = checked.map(el => el.dataset.path);
+    const btn = document.getElementById('btn-delete-folders');
+    btn.disabled = true;
+    try {
+      const res = await App.api.post('/api/folders/delete', { paths });
+      (res.deleted || []).forEach(p => {
+        const el = document.querySelector(`.folder-cleanup-chk[data-path="${CSS.escape(p)}"]`);
+        if (el) el.closest('div[style]').remove();
+      });
+      (res.errors || []).forEach(e => App.toast(`Failed: ${e.path} — ${e.error}`, 'error'));
+      if (res.deleted?.length) App.toast(`Deleted ${res.deleted.length} folder(s)`, 'success');
+      if (!document.querySelectorAll('.folder-cleanup-chk').length)
+        document.getElementById('card-folder-cleanup').style.display = 'none';
+    } catch(e) {
+      App.toast('Delete failed: ' + e, 'error');
+    } finally {
+      btn.disabled = false;
     }
   },
 

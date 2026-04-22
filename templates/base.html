@@ -102,6 +102,12 @@
       <button class="btn btn-ghost btn-sm" onclick="App.closePathModal()"><i data-lucide="x"></i></button>
     </div>
     <div class="modal-body">
+      <div style="display:flex;gap:6px;margin-bottom:10px">
+        <input type="text" class="form-input" id="path-manual-input"
+               placeholder="Type or paste a path (e.g. \\NAS\Share or Z:\Movies)"
+               style="flex:1;font-size:13px">
+        <button class="btn btn-secondary btn-sm" id="path-manual-go">Go</button>
+      </div>
       <div class="path-breadcrumb" id="path-breadcrumb"></div>
       <div id="path-entries"></div>
     </div>
@@ -115,7 +121,7 @@
 <script src="/static/js/main.js"></script>
 <script>
   lucide.createIcons();
-  App.init();
+  App._ready = App.init();
 </script>
 </body>
 </html>

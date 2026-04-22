@@ -2,12 +2,12 @@
 llm_export.py — Phase 2: CSV export for LLM review and re-import of results.
 
 Workflow:
-  1. export_for_llm()  → writes a CSV + a prompt .txt file
+  1. export_for_llm()  -> writes a CSV + a prompt .txt file
   2. User drops the CSV + prompt into their LLM of choice
   3. LLM returns a filled-in CSV
-  4. import_from_llm() → re-validates LLM answers against TMDB, updates DB
-  5. export_for_manual() → CSV of items LLM couldn't resolve
-  6. import_from_manual() → re-validate and update DB
+  4. import_from_llm() -> re-validates LLM answers against TMDB, updates DB
+  5. export_for_manual() -> CSV of items LLM couldn't resolve
+  6. import_from_manual() -> re-validate and update DB
 """
 
 import csv
@@ -73,8 +73,8 @@ def export_for_llm(output_csv: Path, output_prompt: Path) -> int:
 
     _write_csv(output_csv, rows, include_existing_api_data=True)
     _write_llm_prompt(output_prompt, len(rows))
-    console.print(f"[green]Exported {len(rows)} items → {output_csv}[/green]")
-    console.print(f"[green]LLM prompt → {output_prompt}[/green]")
+    console.print(f"[green]Exported {len(rows)} items -> {output_csv}[/green]")
+    console.print(f"[green]LLM prompt -> {output_prompt}[/green]")
     return len(rows)
 
 
@@ -240,7 +240,7 @@ def export_for_manual(output_csv: Path) -> int:
         console.print("[yellow]No items need manual review.[/yellow]")
         return 0
     _write_csv(output_csv, rows, include_existing_api_data=True)
-    console.print(f"[green]Exported {len(rows)} items for manual review → {output_csv}[/green]")
+    console.print(f"[green]Exported {len(rows)} items for manual review -> {output_csv}[/green]")
     console.print(
         "[dim]Edit the file, fill in tmdb_id/confirmed_title/confirmed_year/"
         "confirmed_type/season/episode, then run: python cli.py import-manual[/dim]"

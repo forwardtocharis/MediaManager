@@ -22,8 +22,8 @@ api:
   omdb_key: "your_omdb_key_here"   # https://www.omdbapi.com/apikey.aspx
 
 source:
-  movies_path: "\\\\NAS\\Media\\Movies"
-  tv_path:     "\\\\NAS\\Media\\TV Shows"
+  movies_path: "/path/to/movies"
+  tv_path:     "/path/to/tvshows"
 ```
 
 ### 3. Run the pipeline

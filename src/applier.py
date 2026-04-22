@@ -181,9 +181,9 @@ def _apply_one(row, movies_output: str, tv_output: str,
     is_extra = bool(row["is_extra"])
 
     if not src.exists():
-        logger.warning("Source file missing (already moved?): %s", src)
-        db.update_media_file(media_id, status="skipped",
-                             notes="Source file not found during apply")
+        reason = "Source file not found (already moved or deleted)"
+        logger.warning("%s: skipped — %s", src.name, reason)
+        db.update_media_file(media_id, status="skipped", notes=reason)
         return False
 
     # ── Build destination path ──
@@ -200,7 +200,9 @@ def _apply_one(row, movies_output: str, tv_output: str,
         ep_title = row["episode_title"] or ""
         dst = build_tv_episode_path(tv_output, title, season, episode, ep_title, ext)
     else:
-        logger.warning("Unknown type for %s — skipping", src.name)
+        reason = f"Unknown/unconfirmed type '{media_type}'"
+        logger.warning("%s: skipped — %s", src.name, reason)
+        db.update_media_file(media_id, status="skipped", notes=reason)
         return False
 
     dst = ensure_unique_path(dst)
@@ -209,7 +211,7 @@ def _apply_one(row, movies_output: str, tv_output: str,
     db.update_media_file(media_id, proposed_path=str(dst))
 
     if dry_run:
-        console.print(f"  [dim]{src.name}[/dim]\n  → [cyan]{dst}[/cyan]\n")
+        console.print(f"  [dim]{src.name}[/dim]\n  -> [cyan]{dst}[/cyan]\n")
         return True
 
     # ── Copy → verify ──
@@ -306,7 +308,7 @@ def _move_subtitles(media_id: int, old_video_path: Path,
         sub_dst = ensure_unique_path(sub_dst)
 
         if dry_run:
-            console.print(f"  [dim]{sub_src.name}[/dim] → [cyan]{sub_dst.name}[/cyan]")
+            console.print(f"  [dim]{sub_src.name}[/dim] -> [cyan]{sub_dst.name}[/cyan]")
             continue
 
         m_id = db.log_manifest_op(None, "subtitle", str(sub_src), str(sub_dst), "copy")
@@ -317,6 +319,51 @@ def _move_subtitles(media_id: int, old_video_path: Path,
             db.update_subtitle_file_by_id(
                 sub["id"], status="applied", proposed_path=str(sub_dst)
             )
+
+
+# ─── Source folder cleanup ────────────────────────────────────────────────────
+
+def cleanup_source_folders(source_dirs: set[Path]) -> dict:
+    """
+    After applying, tidy up the source directories.
+
+    - Directories that are now empty: delete silently.
+    - Directories that still exist but contain no media files: return for
+      user review (they may contain extras, samples, subs, etc.).
+
+    Returns:
+        {
+          "deleted": [str, ...],          # folders that were auto-deleted
+          "non_empty": [                  # folders with non-media leftovers
+            {"path": str, "files": [str, ...]},
+            ...
+          ]
+        }
+    """
+    deleted: list[str] = []
+    non_empty: list[dict] = []
+
+    # Walk from deepest to shallowest so nested empties cascade up
+    sorted_dirs = sorted(source_dirs, key=lambda p: len(p.parts), reverse=True)
+
+    for d in sorted_dirs:
+        if not d.exists() or not d.is_dir():
+            continue
+        contents = list(d.iterdir())
+        if not contents:
+            try:
+                d.rmdir()
+                deleted.append(str(d))
+                logger.info("Deleted empty folder: %s", d)
+            except OSError as exc:
+                logger.warning("Could not delete empty folder %s: %s", d, exc)
+        else:
+            non_empty.append({
+                "path": str(d),
+                "files": sorted(f.name for f in contents),
+            })
+
+    return {"deleted": deleted, "non_empty": non_empty}
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────

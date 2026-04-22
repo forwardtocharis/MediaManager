@@ -33,6 +33,9 @@
     <div class="settings-nav-item" data-section="files" onclick="Settings.showSection('files')">
       <i data-lucide="file-video"></i> File Types
     </div>
+    <div class="settings-nav-item" data-section="ssh" onclick="Settings.showSection('ssh')">
+      <i data-lucide="terminal"></i> SSH / NAS
+    </div>
   </div>
 
   <!-- Content -->
@@ -48,14 +51,14 @@
         <div class="form-group">
           <label class="form-label">Movies Source Path</label>
           <div class="input-with-btn">
-            <input type="text" class="form-input" id="movies_path" placeholder="\\NAS\Media\Movies or Z:\Movies">
+            <input type="text" class="form-input" id="movies_path" placeholder="/path/to/movies or Z:\Movies">
             <button class="btn btn-secondary btn-sm" onclick="Settings.browsePath('movies_path')"><i data-lucide="folder-open"></i></button>
           </div>
         </div>
         <div class="form-group">
           <label class="form-label">TV Shows Source Path</label>
           <div class="input-with-btn">
-            <input type="text" class="form-input" id="tv_path" placeholder="\\NAS\Media\TV Shows or Z:\TV">
+            <input type="text" class="form-input" id="tv_path" placeholder="/path/to/tvshows or Z:\TV">
             <button class="btn btn-secondary btn-sm" onclick="Settings.browsePath('tv_path')"><i data-lucide="folder-open"></i></button>
           </div>
         </div>
@@ -75,6 +78,17 @@
             <input type="text" class="form-input" id="tv_out_path" placeholder="Same as source if blank">
             <button class="btn btn-secondary btn-sm" onclick="Settings.browsePath('tv_out_path')"><i data-lucide="folder-open"></i></button>
           </div>
+        </div>
+      </div>
+      <div class="settings-card">
+        <div class="form-group">
+          <label class="form-label">Scan Mode</label>
+          <select class="form-select" id="scan_mode">
+            <option value="both">Movies &amp; TV Shows</option>
+            <option value="movies">Movies only</option>
+            <option value="tv">TV Shows only</option>
+          </select>
+          <div class="form-hint">Controls which source paths are scanned and processed.</div>
         </div>
       </div>
       <div class="settings-card">
@@ -234,6 +248,66 @@
       </div>
     </div>
 
+    <!-- SSH / NAS -->
+    <div class="settings-section" id="section-ssh">
+      <div>
+        <div class="settings-section-title">SSH / NAS Apply</div>
+        <div class="settings-section-desc">Run rename and move operations directly on your NAS over SSH. Files never traverse the network — only commands do. Leave disabled to use the default local method.</div>
+      </div>
+      <div class="settings-card">
+        <div class="form-group">
+          <label class="form-label" style="display:flex;align-items:center;gap:10px">
+            <input type="checkbox" id="ssh_enabled" style="width:16px;height:16px;accent-color:var(--accent)">
+            Enable SSH apply (run file operations on NAS)
+          </label>
+        </div>
+      </div>
+      <div class="settings-card">
+        <div class="form-row">
+          <div class="form-group" style="flex:2">
+            <label class="form-label">NAS Hostname / IP</label>
+            <input type="text" class="form-input" id="ssh_host" placeholder="nas.local or 192.168.1.100">
+          </div>
+          <div class="form-group" style="flex:0 0 90px">
+            <label class="form-label">Port</label>
+            <input type="number" class="form-input" id="ssh_port" value="22" min="1" max="65535">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Username</label>
+            <input type="text" class="form-input" id="ssh_username" placeholder="admin">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Password <span style="font-size:11px;color:var(--text-4)">(or use key below)</span></label>
+            <input type="password" class="form-input" id="ssh_password" placeholder="leave blank if using key">
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">SSH Key Path <span style="font-size:11px;color:var(--text-4)">(optional — path on this PC)</span></label>
+          <input type="text" class="form-input" id="ssh_key_path" placeholder="C:\Users\you\.ssh\id_rsa">
+        </div>
+      </div>
+      <div class="settings-card">
+        <div style="font-size:13px;font-weight:600;margin-bottom:4px">Path Map</div>
+        <div class="form-hint" style="margin-bottom:10px">Map each Windows UNC / drive prefix to its POSIX path on the NAS.<br>
+          e.g. <code>/mnt/media</code> → <code>/volume1/media</code></div>
+        <div id="ssh-path-map-rows"></div>
+        <button class="btn btn-secondary btn-sm" style="margin-top:8px" onclick="Settings.addPathMapRow()">
+          <i data-lucide="plus"></i> Add mapping
+        </button>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button class="btn btn-secondary" onclick="Settings.testSsh()">
+          <i data-lucide="plug"></i> Test Connection
+        </button>
+        <button class="btn btn-secondary" id="ssh-install-btn" onclick="Settings.installParamiko()">
+          <i data-lucide="download"></i> Install paramiko
+        </button>
+        <div id="ssh-test-result" style="font-size:13px"></div>
+      </div>
+    </div>
+
   </div>
 </div>
 
@@ -263,6 +337,7 @@ const Settings = {
     Settings.setVal('tv_path',       s.tv_path || '');
     Settings.setVal('movies_out_path', o.movies_path || '');
     Settings.setVal('tv_out_path',   o.tv_path || '');
+    Settings.setVal('scan_mode',     cfg.scan_mode || 'both');
     Settings.setVal('db_path',       db.path || 'mediamanager.db');
 
     // API keys — don't reveal, just mark if set
@@ -292,6 +367,15 @@ const Settings = {
     Settings.setVal('llm_batch', lm.batch_size || 20);
     Settings.setVal('llm_temp',  lm.temperature || 0.1);
     Settings.selectedProvider = lm.provider || null;
+
+    const sh = cfg.ssh || {};
+    document.getElementById('ssh_enabled').checked = !!sh.enabled;
+    Settings.setVal('ssh_host',     sh.host || '');
+    Settings.setVal('ssh_port',     sh.port || 22);
+    Settings.setVal('ssh_username', sh.username || '');
+    document.getElementById('ssh_password').placeholder = sh.password ? '(configured)' : 'leave blank if using key';
+    Settings.setVal('ssh_key_path', sh.key_path || '');
+    Settings._renderPathMap(sh.path_map || {});
   },
 
   setVal(id, val) {
@@ -305,7 +389,7 @@ const Settings = {
     const grid = document.getElementById('provider-grid');
     grid.innerHTML = providers.map(p => `
       <div class="provider-card ${Settings.selectedProvider===p.id?'selected':''}" id="pcard-${p.id}"
-           onclick="Settings.selectProvider('${p.id}', ${JSON.stringify(p.models||[])})">
+           data-provider-id="${p.id}">
         <div class="provider-name">${p.label}</div>
         <div class="provider-status ${p.available ? 'available':'unavailable'}">
           ${p.available ? '● Available' : '○ Not detected'}
@@ -314,6 +398,16 @@ const Settings = {
           ${p.models?.length ? p.models.slice(0,4).join('\n') : p.id==='custom' ? 'Enter endpoint URL' : 'No models loaded'}
         </div>
       </div>`).join('');
+
+    Settings._providerModels = {};
+    providers.forEach(p => { Settings._providerModels[p.id] = p.models || []; });
+
+    grid.querySelectorAll('.provider-card').forEach(card => {
+      card.addEventListener('click', () => {
+        const id = card.dataset.providerId;
+        Settings.selectProvider(id, Settings._providerModels[id] || []);
+      });
+    });
 
     if (Settings.selectedProvider) {
       const p = providers.find(x => x.id === Settings.selectedProvider);
@@ -374,6 +468,7 @@ const Settings = {
       .map(s => s.trim()).filter(Boolean);
 
     const cfg = {
+      scan_mode: document.getElementById('scan_mode').value,
       source: {
         movies_path: document.getElementById('movies_path').value.trim(),
         tv_path:     document.getElementById('tv_path').value.trim(),
@@ -416,6 +511,17 @@ const Settings = {
     if (tmdbKey) cfg.api.tmdb_key = tmdbKey;
     if (omdbKey) cfg.api.omdb_key = omdbKey;
 
+    const sshPassword = document.getElementById('ssh_password').value;
+    cfg.ssh = {
+      enabled:  document.getElementById('ssh_enabled').checked,
+      host:     document.getElementById('ssh_host').value.trim(),
+      port:     parseInt(document.getElementById('ssh_port').value) || 22,
+      username: document.getElementById('ssh_username').value.trim(),
+      key_path: document.getElementById('ssh_key_path').value.trim(),
+      path_map: Settings._collectPathMap(),
+    };
+    if (sshPassword) cfg.ssh.password = sshPassword;
+
     const res = await App.api.post('/api/config', cfg);
     if (res.ok) {
       App.toast('Settings saved!', 'success');
@@ -430,6 +536,94 @@ const Settings = {
     document.querySelectorAll('.settings-nav-item').forEach(el => el.classList.remove('active'));
     document.getElementById(`section-${name}`)?.classList.add('active');
     document.querySelector(`[data-section="${name}"]`)?.classList.add('active');
+  },
+
+  _renderPathMap(map) {
+    const container = document.getElementById('ssh-path-map-rows');
+    container.innerHTML = '';
+    for (const [win, posix] of Object.entries(map)) {
+      Settings._appendPathMapRow(win, posix);
+    }
+  },
+
+  _appendPathMapRow(win = '', posix = '') {
+    const container = document.getElementById('ssh-path-map-rows');
+    const row = document.createElement('div');
+    row.className = 'form-row';
+    row.style.alignItems = 'center';
+    row.innerHTML = `
+      <div class="form-group" style="flex:1">
+        <input type="text" class="form-input ssh-map-win" placeholder="/path/to/media" value="${win}">
+      </div>
+      <div style="padding:0 6px;color:var(--text-3)">→</div>
+      <div class="form-group" style="flex:1">
+        <input type="text" class="form-input ssh-map-posix" placeholder="/volume1/media" value="${posix}">
+      </div>
+      <button class="btn btn-secondary btn-sm" style="margin-left:6px;flex:0" onclick="this.closest('.form-row').remove()">
+        <i data-lucide="trash-2"></i>
+      </button>`;
+    container.appendChild(row);
+    lucide.createIcons();
+  },
+
+  addPathMapRow() {
+    Settings._appendPathMapRow();
+  },
+
+  _collectPathMap() {
+    const map = {};
+    document.querySelectorAll('#ssh-path-map-rows .form-row').forEach(row => {
+      const win   = row.querySelector('.ssh-map-win')?.value.trim();
+      const posix = row.querySelector('.ssh-map-posix')?.value.trim();
+      if (win && posix) map[win] = posix;
+    });
+    return map;
+  },
+
+  async installParamiko() {
+    const resEl = document.getElementById('ssh-test-result');
+    const btn   = document.getElementById('ssh-install-btn');
+    btn.disabled = true;
+    resEl.textContent = 'Installing paramiko...';
+    resEl.style.color = 'var(--text-3)';
+    try {
+      const { job_id } = await App.api.post('/api/jobs/install-dep', { package: 'paramiko' });
+      await new Promise((resolve) => {
+        const es = new EventSource(`/stream/${job_id}`);
+        es.onmessage = (e) => {
+          const msg = JSON.parse(e.data);
+          if (msg.type === 'log') {
+            resEl.textContent = msg.message;
+            resEl.style.color = msg.level === 'success' ? 'var(--green)'
+                              : msg.level === 'error'   ? 'var(--red)'
+                              : 'var(--text-3)';
+          }
+          if (msg.type === 'done' || msg.type === 'complete') { es.close(); resolve(msg); }
+        };
+        es.onerror = () => { es.close(); resolve(null); };
+      });
+    } catch(e) {
+      resEl.textContent = String(e);
+      resEl.style.color = 'var(--red)';
+    } finally {
+      btn.disabled = false;
+    }
+  },
+
+  async testSsh() {
+    const resEl = document.getElementById('ssh-test-result');
+    resEl.textContent = 'Connecting...';
+    resEl.style.color = 'var(--text-3)';
+    const res = await App.api.post('/api/config/test/ssh', {
+      host:     document.getElementById('ssh_host').value.trim(),
+      port:     parseInt(document.getElementById('ssh_port').value) || 22,
+      username: document.getElementById('ssh_username').value.trim(),
+      password: document.getElementById('ssh_password').value,
+      key_path: document.getElementById('ssh_key_path').value.trim(),
+      path_map: Settings._collectPathMap(),
+    });
+    resEl.textContent = res.message;
+    resEl.style.color = res.ok ? 'var(--green)' : 'var(--red)';
   },
 };
 

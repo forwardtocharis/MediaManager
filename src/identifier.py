@@ -77,7 +77,7 @@ def run(
                     stats["needs_manual"] += 1
 
             except (TMDBPaused, OMDBPaused) as e:
-                console.print(f"\n[bold red]API rate limit hit → pausing.[/bold red]\n{e}")
+                console.print(f"\n[bold red]API rate limit hit -> pausing.[/bold red]\n{e}")
                 break
             except Exception as e:
                 logger.warning("Error identifying %s: %s", row["filename"], e)

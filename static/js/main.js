@@ -167,6 +167,20 @@ const App = {
       }
       App.closePathModal();
     };
+    const manualInput = document.getElementById('path-manual-input');
+    const manualGo    = document.getElementById('path-manual-go');
+    if (manualInput) {
+      manualInput.value = '';
+      manualInput.onkeydown = (e) => {
+        if (e.key === 'Enter') { const v = e.target.value.trim(); if (v) App.browseTo(v); }
+      };
+    }
+    if (manualGo) {
+      manualGo.onclick = () => {
+        const v = manualInput?.value.trim();
+        if (v) App.browseTo(v);
+      };
+    }
   },
 
   closePathModal() {
@@ -178,44 +192,60 @@ const App = {
     const data = await App.api.get('/api/browse?path=' + encodeURIComponent(path));
     if (data.error) { App.toast(data.error, 'error'); return; }
 
-    // Breadcrumb
+    // Breadcrumb — build with data attributes to avoid escaping issues
     const bc = document.getElementById('path-breadcrumb');
+    bc.innerHTML = '';
     if (!path) {
-      bc.innerHTML = '<span>This PC</span>';
+      bc.appendChild(Object.assign(document.createElement('span'), { textContent: 'This PC' }));
     } else {
+      const root = Object.assign(document.createElement('span'), {
+        textContent: 'Root',
+        style: 'cursor:pointer;color:var(--accent-l)',
+      });
+      root.onclick = () => App.browseTo('');
+      bc.appendChild(root);
+
       const parts = path.replace(/\\/g, '/').split('/').filter(Boolean);
       let built = '';
-      bc.innerHTML = '<span style="cursor:pointer;color:var(--accent-l)" onclick="App.browseTo(\'\')">Root</span>';
-      parts.forEach((part, i) => {
+      parts.forEach((part) => {
         built += (built ? '\\' : '') + part;
+        const sep = Object.assign(document.createElement('span'), {
+          textContent: ' › ', style: 'color:var(--text-4)',
+        });
+        bc.appendChild(sep);
         const nav = built;
-        bc.innerHTML += ` <span style="color:var(--text-4)">›</span> <span style="cursor:pointer;color:var(--accent-l)" onclick="App.browseTo('${nav}')">${part}</span>`;
+        const crumb = Object.assign(document.createElement('span'), {
+          textContent: part, style: 'cursor:pointer;color:var(--accent-l)',
+        });
+        crumb.onclick = () => App.browseTo(nav);
+        bc.appendChild(crumb);
       });
     }
 
     // Current selection display
-    if (path) {
-      document.getElementById('path-select-btn').textContent = 'Select "' + path.split('\\').pop() + '"';
-    } else {
-      document.getElementById('path-select-btn').textContent = 'Select This Folder';
-    }
+    document.getElementById('path-select-btn').textContent = path
+      ? 'Select "' + (path.split('\\').pop() || path) + '"'
+      : 'Select This Folder';
 
     // Entries
     const entries = document.getElementById('path-entries');
-    let html = '';
+    entries.innerHTML = '';
     if (data.parent !== null && data.parent !== undefined) {
-      html += `<div class="path-entry" onclick="App.browseTo(${JSON.stringify(data.parent)})">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5m7-7-7 7 7 7"/></svg>
-        <span style="color:var(--text-3)">.. (up)</span>
-      </div>`;
+      const up = document.createElement('div');
+      up.className = 'path-entry';
+      up.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5m7-7-7 7 7 7"/></svg><span style="color:var(--text-3)">.. (up)</span>`;
+      up.onclick = () => App.browseTo(data.parent);
+      entries.appendChild(up);
     }
     (data.entries || []).forEach(e => {
-      html += `<div class="path-entry" onclick="App.browseTo(${JSON.stringify(e.path)})">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-        <span>${e.name}</span>
-      </div>`;
+      const row = document.createElement('div');
+      row.className = 'path-entry';
+      row.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg><span>${e.name}</span>`;
+      row.onclick = () => App.browseTo(e.path);
+      entries.appendChild(row);
     });
-    if (!html && path) html = '<div class="text-muted text-small" style="padding:12px">No subfolders</div>';
-    entries.innerHTML = html;
+    if (!entries.children.length && path) {
+      entries.innerHTML = '<div class="text-muted text-small" style="padding:12px">No subfolders</div>';
+    }
   },
 };
