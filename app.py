@@ -71,6 +71,7 @@ def init_db():
 # ─── Background job management ────────────────────────────────────────────────
 
 _job_queues: dict[str, queue.Queue] = {}
+_job_stop_events: dict[str, threading.Event] = {}
 _job_queues_lock = threading.Lock()
 
 
@@ -78,6 +79,7 @@ def create_job() -> str:
     job_id = str(uuid.uuid4())[:8]
     with _job_queues_lock:
         _job_queues[job_id] = queue.Queue()
+        _job_stop_events[job_id] = threading.Event()
     return job_id
 
 
@@ -91,8 +93,18 @@ def send_event(job_id: str, event_type: str, data: dict) -> None:
 def end_job(job_id: str) -> None:
     with _job_queues_lock:
         q = _job_queues.get(job_id)
+        _job_stop_events.pop(job_id, None)
     if q:
         q.put(None)
+
+
+@app.route("/api/jobs/<job_id>/cancel", methods=["POST"])
+def job_cancel(job_id):
+    with _job_queues_lock:
+        ev = _job_stop_events.get(job_id)
+    if ev:
+        ev.set()
+    return jsonify({"ok": True})
 
 
 # ─── SSE stream endpoint ──────────────────────────────────────────────────────
@@ -338,7 +350,16 @@ def _redact_config(cfg: dict) -> dict:
     return c
 
 
-def _make_apply_fn(cfg: dict):
+def _make_debug_cb(job_id: str, enabled: bool):
+    """Return a callable that sends a debug SSE log when debug mode is on."""
+    if not enabled:
+        return None
+    def cb(msg: str):
+        send_event(job_id, "log", {"message": f"[DEBUG] {msg}", "level": "debug"})
+    return cb
+
+
+def _make_apply_fn(cfg: dict, debug_cb=None):
     """
     Return (apply_fn, cleanup_fn) where apply_fn has the same signature as
     applier._apply_one but routes to SSH when enabled.
@@ -350,13 +371,16 @@ def _make_apply_fn(cfg: dict):
         session = session_from_config(ssh_cfg)
         def apply_fn(row, movies_out, tv_out, dry_run, written_show_nfos):
             return apply_one_ssh(row, movies_out, tv_out, dry_run,
-                                 written_show_nfos, session)
+                                 written_show_nfos, session, debug_cb=debug_cb)
         def cleanup():
             session.close()
         return apply_fn, cleanup
     else:
         from src.applier import _apply_one
-        return _apply_one, lambda: None
+        def apply_fn(row, movies_out, tv_out, dry_run, written_show_nfos):
+            return _apply_one(row, movies_out, tv_out, dry_run,
+                              written_show_nfos, debug_cb=debug_cb)
+        return apply_fn, lambda: None
 
 @app.route("/api/config", methods=["GET"])
 def api_get_config():
@@ -427,8 +451,13 @@ def api_test_ssh():
             return jsonify({"ok": False, "message": "Host and username are required"})
         session = session_from_config(ssh_cfg)
         hostname = session.test()
+        share_name = next(iter(ssh_cfg["path_map"]), "").rstrip("/\\").split("\\")[-1].split("/")[-1]
+        diag = session.diagnose_path_map(share_name) if share_name else []
         session.close()
-        return jsonify({"ok": True, "message": f"Connected to {hostname}"})
+        msg = f"Connected to {hostname}"
+        if diag:
+            msg += "\n\n" + "\n".join(diag)
+        return jsonify({"ok": True, "message": msg})
     except Exception as e:
         logger.error("SSH test failed: %s", e, exc_info=True)
         return jsonify({"ok": False, "message": str(e)})
@@ -784,6 +813,7 @@ def job_llm():
         return jsonify({"error": "No LLM provider configured"}), 400
 
     def run():
+        stop_event = _job_stop_events.get(job_id)
         try:
             from src import db as _db
             from src.llm import run_llm_pass
@@ -803,13 +833,25 @@ def job_llm():
                     "current": current, "total": total,
                     "filename": filename, "result": result})
 
+            def batch_cb(batch_num, total_batches):
+                send_event(job_id, "log", {
+                    "message": f"Calling LLM for batch {batch_num} of {total_batches}...",
+                    "level": "info"})
+
             stats = run_llm_pass(
                 files=files, provider=provider, model=model,
                 endpoint=endpoint, api_key=api_key,
-                batch_size=batch_size, tmdb=tmdb, progress_cb=cb)
-            send_event(job_id, "log", {
-                "message": f"LLM complete — {stats['confirmed']} confirmed, {stats['skipped']} skipped, {stats['errors']} errors.",
-                "level": "success"})
+                batch_size=batch_size, tmdb=tmdb, progress_cb=cb,
+                stop_event=stop_event, batch_cb=batch_cb)
+
+            if stats.get("cancelled"):
+                send_event(job_id, "log", {
+                    "message": f"Cancelled — {stats['confirmed']} confirmed, {stats['skipped']} skipped, {stats['errors']} errors.",
+                    "level": "warning"})
+            else:
+                send_event(job_id, "log", {
+                    "message": f"LLM complete — {stats['confirmed']} confirmed, {stats['skipped']} skipped, {stats['errors']} errors.",
+                    "level": "success"})
             send_event(job_id, "complete", stats)
         except Exception as e:
             send_event(job_id, "log", {"message": f"Error: {e}", "level": "error"})
@@ -834,8 +876,10 @@ def job_apply():
     movies_out = (output.get("movies_path") or source.get("movies_path", "")).strip()
     tv_out     = (output.get("tv_path")     or source.get("tv_path", "")).strip()
 
+    debug_mode = cfg.get("advanced", {}).get("debug_mode", False)
+
     def run():
-        apply_fn, cleanup = _make_apply_fn(cfg)
+        apply_fn, cleanup = _make_apply_fn(cfg, debug_cb=_make_debug_cb(job_id, debug_mode))
         try:
             from src import db as _db
 
@@ -851,6 +895,16 @@ def job_apply():
                     f"AND phase IN ({placeholders}) ORDER BY id",
                     phase_nums).fetchall()
 
+            if debug_mode:
+                send_event(job_id, "log", {"message": f"[DEBUG] Found {len(rows)} identified row(s) in phase(s) {phase_nums}", "level": "debug"})
+                with _db.connect() as conn2:
+                    other = conn2.execute(
+                        f"SELECT status, COUNT(*) n FROM media_files "
+                        f"WHERE status != 'identified' AND phase IN ({placeholders}) GROUP BY status",
+                        phase_nums).fetchall()
+                    for o in other:
+                        send_event(job_id, "log", {"message": f"[DEBUG] {o['n']} file(s) in phase(s) {phase_nums} have status='{o['status']}' (not eligible)", "level": "debug"})
+
             ssh_mode = cfg.get("ssh", {}).get("enabled", False)
             total = len(rows)
             send_event(job_id, "log", {
@@ -863,7 +917,10 @@ def job_apply():
             source_dirs: set = set()
             for i, row in enumerate(rows):
                 try:
-                    ok = apply_fn(row, movies_out, tv_out, dry_run, written_show_nfos)
+                    if debug_mode:
+                        send_event(job_id, "log", {"message": f"[DEBUG] Processing: {row['filename']}  status={row['status']}  phase={row['phase']}  type={row['confirmed_type']}  path={row['original_path']}", "level": "debug"})
+                    result = apply_fn(row, movies_out, tv_out, dry_run, written_show_nfos)
+                    ok = result is True
                     if ok:
                         applied += 1
                         source_dirs.add(Path(row["original_path"]).parent)
@@ -872,7 +929,8 @@ def job_apply():
                     send_event(job_id, "progress", {
                         "current": i + 1, "total": total,
                         "filename": row["filename"],
-                        "result": "applied" if ok else "skipped"})
+                        "result": "applied" if ok else "skipped",
+                        "skip_reason": result if not ok and isinstance(result, str) else None})
                 except Exception as e:
                     errors += 1
                     send_event(job_id, "log", {"message": f"Error: {row['filename']}: {e}", "level": "error"})
@@ -1066,6 +1124,70 @@ def api_verify():
     return jsonify({"files": files, "summary": summary})
 
 
+@app.route("/api/jobs/re-identify", methods=["POST"])
+def job_re_identify():
+    body = request.get_json(silent=True) or {}
+    statuses = body.get("statuses", ["needs_manual", "needs_llm", "error"])
+    job_id = create_job()
+
+    def run():
+        try:
+            from src import db
+            rows = db.get_media_by_status(statuses)
+            ids = [r["id"] for r in rows]
+            if not ids:
+                send_event(job_id, "log", {"message": "No files with the selected statuses.", "level": "info"})
+                send_event(job_id, "complete", {"reset": 0})
+                return
+            send_event(job_id, "log", {"message": f"Resetting {len(ids)} files to pending...", "level": "info"})
+            count = db.reset_media_to_pending(ids)
+            send_event(job_id, "log", {"message": f"Done — {count} files reset. Run Identify to process them.", "level": "success"})
+            send_event(job_id, "complete", {"reset": count})
+        except Exception as e:
+            send_event(job_id, "log", {"message": f"Error: {e}", "level": "error"})
+        finally:
+            end_job(job_id)
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify({"job_id": job_id})
+
+
+@app.route("/api/jobs/purge-missing", methods=["POST"])
+def job_purge_missing():
+    body = request.get_json(silent=True) or {}
+    dry_run = body.get("dry_run", True)
+    job_id = create_job()
+
+    def run():
+        try:
+            from src import db as _db
+            from pathlib import Path as _Path
+            all_rows = _db.get_all_media_paths()
+            missing = [r for r in all_rows if not _Path(r["original_path"]).exists()]
+            if not missing:
+                send_event(job_id, "log", {"message": "All media files accounted for — nothing to purge.", "level": "info"})
+                send_event(job_id, "complete", {"purged": 0, "dry_run": dry_run})
+                return
+            label = "[DRY RUN] " if dry_run else ""
+            send_event(job_id, "log", {"message": f"{label}Found {len(missing)} missing files:", "level": "warning"})
+            for r in missing:
+                send_event(job_id, "log", {"message": r["original_path"], "level": "warning"})
+            if not dry_run:
+                for r in missing:
+                    _db.delete_media_file(r["id"])
+                send_event(job_id, "log", {"message": f"Removed {len(missing)} records.", "level": "success"})
+            else:
+                send_event(job_id, "log", {"message": f"{len(missing)} records would be removed. Run with Purge (Live) to delete.", "level": "info"})
+            send_event(job_id, "complete", {"purged": len(missing) if not dry_run else 0, "found": len(missing), "dry_run": dry_run})
+        except Exception as e:
+            send_event(job_id, "log", {"message": f"Error: {e}", "level": "error"})
+        finally:
+            end_job(job_id)
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify({"job_id": job_id})
+
+
 @app.route("/api/jobs/apply-selected", methods=["POST"])
 def job_apply_selected():
     """Apply changes for a specific list of file IDs."""
@@ -1083,9 +1205,10 @@ def job_apply_selected():
     tv_out     = (output.get("tv_path")     or source.get("tv_path", "")).strip()
 
     job_id = create_job()
+    debug_mode = cfg.get("advanced", {}).get("debug_mode", False)
 
     def run():
-        apply_fn, cleanup = _make_apply_fn(cfg)
+        apply_fn, cleanup = _make_apply_fn(cfg, debug_cb=_make_debug_cb(job_id, debug_mode))
         try:
             from src import db as _db
 
@@ -1095,6 +1218,9 @@ def job_apply_selected():
                     f"SELECT * FROM media_files WHERE id IN ({placeholders}) ORDER BY id",
                     file_ids
                 ).fetchall()
+
+            if debug_mode:
+                send_event(job_id, "log", {"message": f"[DEBUG] apply-selected: {len(rows)} row(s) fetched for ids {file_ids}", "level": "debug"})
 
             ssh_mode = cfg.get("ssh", {}).get("enabled", False)
             total = len(rows)
@@ -1110,7 +1236,10 @@ def job_apply_selected():
 
             for i, row in enumerate(rows):
                 try:
-                    ok = apply_fn(row, movies_out, tv_out, dry_run, written_show_nfos)
+                    if debug_mode:
+                        send_event(job_id, "log", {"message": f"[DEBUG] Processing: {row['filename']}  status={row['status']}  phase={row['phase']}  type={row['confirmed_type']}  path={row['original_path']}", "level": "debug"})
+                    result = apply_fn(row, movies_out, tv_out, dry_run, written_show_nfos)
+                    ok = result is True
                     if ok:
                         applied += 1
                         source_dirs.add(Path(row["original_path"]).parent)
@@ -1119,7 +1248,8 @@ def job_apply_selected():
                     send_event(job_id, "progress", {
                         "current": i + 1, "total": total,
                         "filename": row["filename"],
-                        "result": "applied" if ok else "skipped"})
+                        "result": "applied" if ok else "skipped",
+                        "skip_reason": result if not ok and isinstance(result, str) else None})
                 except Exception as e:
                     errors += 1
                     send_event(job_id, "log", {

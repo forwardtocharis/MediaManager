@@ -65,15 +65,25 @@ class SSHSession:
         e.g. '\\\\diskstation\\chat\\Movies\\foo.mkv'
              → '/volume1/chat/Movies/foo.mkv'
         """
+        # Collapse all backslashes to forward slashes, then deduplicate leading slashes
+        # so both \\server\share and \\\\server\\share normalise to //server/share.
         normalized = win_path.replace("\\", "/")
+        logger.debug("to_posix input: %r  normalized: %r", win_path, normalized)
 
         for win_prefix, posix_prefix in self._path_map.items():
             win_norm = win_prefix.replace("\\", "/")
-            if normalized.lower().startswith(win_norm.lower()):
-                relative = normalized[len(win_norm):].lstrip("/")
-                return posixpath.join(posix_prefix.rstrip("/"), relative)
+            norm_stripped = normalized.lstrip("/")
+            prefix_stripped = win_norm.lstrip("/")
+            logger.debug("  trying prefix %r (stripped: %r) match=%s",
+                         win_prefix, prefix_stripped,
+                         norm_stripped.lower().startswith(prefix_stripped.lower()))
+            if norm_stripped.lower().startswith(prefix_stripped.lower()):
+                relative = norm_stripped[len(prefix_stripped):].lstrip("/")
+                result = posixpath.join(posix_prefix.rstrip("/"), relative)
+                logger.debug("  -> mapped to %r", result)
+                return result
 
-        # No mapping found — assume the path is already POSIX or is rooted
+        logger.debug("  -> no mapping, returning normalized: %r", normalized)
         return normalized
 
     # ── Remote operations ─────────────────────────────────────────────────────
@@ -81,8 +91,17 @@ class SSHSession:
     def exists(self, posix_path: str) -> bool:
         try:
             self._sftp.stat(posix_path)
+            logger.debug("SSH exists: %r -> True", posix_path)
             return True
-        except FileNotFoundError:
+        except Exception as e:
+            parent = posixpath.dirname(posix_path)
+            try:
+                entries = self._sftp.listdir(parent)
+                logger.debug("SSH exists: %r -> False (%s: %s); parent %r contains: %s",
+                             posix_path, type(e).__name__, e, parent, entries)
+            except Exception as list_err:
+                logger.debug("SSH exists: %r -> False (%s: %s); parent %r not listable: %s",
+                             posix_path, type(e).__name__, e, parent, list_err)
             return False
 
     def file_size(self, posix_path: str) -> int:
@@ -143,9 +162,43 @@ class SSHSession:
         """Verify connectivity by listing the root via SFTP and return the server banner."""
         transport = self._client.get_transport()
         banner = transport.remote_version if transport else "unknown"
-        # Use SFTP stat on "/" as a lightweight connectivity check
         self._sftp.stat("/")
         return banner
+
+    def diagnose_path_map(self, share_name: str) -> list[str]:
+        """
+        Walk the NAS filesystem to find where a named share lives.
+        Returns a list of diagnostic lines suitable for display in the UI.
+        """
+        lines = []
+
+        def _listdir(path):
+            try:
+                return self._sftp.listdir(path)
+            except Exception as e:
+                return [f"<error: {e}>"]
+
+        # List filesystem roots
+        root_entries = _listdir("/")
+        lines.append(f"/ contains: {root_entries}")
+
+        # Check common Synology volume roots
+        for vol in root_entries:
+            vol_path = f"/{vol}"
+            try:
+                self._sftp.stat(vol_path)
+                entries = _listdir(vol_path)
+                lines.append(f"{vol_path}/ contains: {entries}")
+                # If this volume contains the share, dig one level deeper
+                for entry in entries:
+                    if entry.lower() == share_name.lower():
+                        share_path = f"{vol_path}/{entry}"
+                        sub = _listdir(share_path)
+                        lines.append(f"  ** FOUND {share_path}/ contains: {sub[:10]}")
+            except Exception:
+                pass
+
+        return lines
 
 
 # ─── Connection factory ────────────────────────────────────────────────────────
@@ -168,11 +221,11 @@ def session_from_config(ssh_cfg: dict) -> SSHSession:
 
 def apply_one_ssh(row, movies_output: str, tv_output: str,
                   dry_run: bool, written_show_nfos: set,
-                  session: SSHSession) -> bool:
+                  session: SSHSession, debug_cb=None) -> bool:
     """
     SSH equivalent of applier._apply_one.
     All file ops run on the NAS; only NFO content is built locally and pushed.
-    Returns True if the file was processed.
+    Returns True if the file was processed, or a reason string if skipped.
     """
     from src import db
     from src.utils.file_utils import (
@@ -183,6 +236,10 @@ def apply_one_ssh(row, movies_output: str, tv_output: str,
     from src.utils.nfo_writer import write_movie_nfo, write_tvshow_nfo, write_episode_nfo
     import io, tempfile, os
 
+    def dbg(msg):
+        if debug_cb:
+            debug_cb(msg)
+
     media_id   = row["id"]
     src_win    = row["original_path"]
     media_type = row["confirmed_type"]
@@ -192,12 +249,23 @@ def apply_one_ssh(row, movies_output: str, tv_output: str,
     is_extra   = bool(row["is_extra"])
 
     src_posix = session.to_posix(src_win)
+    dbg(f"src_win={src_win!r}  →  src_posix={src_posix!r}")
+    dbg(f"type={media_type!r}  title={title!r}  year={year!r}  ext={ext!r}  is_extra={is_extra}")
 
     if not session.exists(src_posix):
+        parent = posixpath.dirname(src_posix)
+        try:
+            entries = session._sftp.listdir(parent)
+            dbg(f"DEBUG listdir {parent!r}: {entries}")
+        except Exception as le:
+            dbg(f"DEBUG listdir {parent!r}: failed — {le}")
+        reason = f"SSH: source file not found on NAS at {src_posix!r}"
         logger.warning("SSH: source not found: %s", src_posix)
-        db.update_media_file(media_id, status="skipped",
-                             notes="SSH: source file not found")
-        return False
+        db.update_media_file(media_id, status="skipped", notes=reason)
+        dbg(f"SKIP — {reason}")
+        return reason
+
+    dbg(f"source exists ✓")
 
     # ── Build destination (Windows path, then convert) ──
     if media_type == "movie":
@@ -212,16 +280,21 @@ def apply_one_ssh(row, movies_output: str, tv_output: str,
         season   = row["season"] or row["guessed_season"] or 1
         episode  = row["episode"] or row["guessed_episode"] or 1
         ep_title = row["episode_title"] or ""
+        dbg(f"TV: season={season}  episode={episode}  ep_title={ep_title!r}  tv_output={tv_output!r}")
         dst_win  = str(build_tv_episode_path(tv_output, title, season, episode, ep_title, ext))
     else:
+        reason = f"SSH: unknown/unconfirmed type '{media_type}'"
         logger.warning("SSH: unknown type for %s — skipping", src_win)
-        return False
+        dbg(f"SKIP — {reason}")
+        return reason
 
     dst_posix = session.ensure_unique(session.to_posix(dst_win))
+    dbg(f"dst_win={dst_win!r}  →  dst_posix={dst_posix!r}")
 
     db.update_media_file(media_id, proposed_path=dst_win)
 
     if dry_run:
+        dbg(f"dry_run=True — would rename {src_posix!r} → {dst_posix!r}")
         return True
 
     # ── Rename/move on NAS ──

@@ -230,6 +230,52 @@ def update_media_file(media_id: int, **kwargs) -> None:
         )
 
 
+def delete_media_file(media_id: int) -> None:
+    with connect() as conn:
+        conn.execute("DELETE FROM media_files WHERE id=?", (media_id,))
+
+
+def reset_media_to_pending(media_ids: list[int]) -> int:
+    """Reset a list of media file IDs back to 'pending' so they can be re-identified."""
+    if not media_ids:
+        return 0
+    placeholders = ",".join("?" * len(media_ids))
+    reset_fields = {
+        "status": "pending",
+        "phase": 0,
+        "confidence": None,
+        "tmdb_id": None,
+        "imdb_id": None,
+        "confirmed_title": None,
+        "confirmed_year": None,
+        "confirmed_type": None,
+        "season": None,
+        "episode": None,
+        "episode_title": None,
+        "genres": None,
+        "plot": None,
+        "rating": None,
+        "director": None,
+        "cast": None,
+        "air_date": None,
+        "notes": None,
+    }
+    sets = ", ".join(f"{k}=?" for k in reset_fields)
+    values = list(reset_fields.values()) + media_ids
+    with connect() as conn:
+        conn.execute(
+            f"UPDATE media_files SET {sets}, updated_at=datetime('now') WHERE id IN ({placeholders})",
+            values
+        )
+    return len(media_ids)
+
+
+def get_all_media_paths() -> list[sqlite3.Row]:
+    """Return id + original_path for every media file in the DB."""
+    with connect() as conn:
+        return conn.execute("SELECT id, original_path FROM media_files").fetchall()
+
+
 def get_media_by_status(status: str | list) -> list[sqlite3.Row]:
     with connect() as conn:
         if isinstance(status, list):

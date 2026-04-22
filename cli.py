@@ -334,11 +334,15 @@ def import_manual(ctx, input_file):
 @click.option("--dry-run/--no-dry-run", default=True, show_default=True,
               help="Preview changes without writing files")
 @click.option("--limit", default=None, type=int, help="Max files to process")
+@click.option("--debug", is_flag=True, default=False, help="Enable verbose per-file debug output")
 @click.pass_context
-def apply(ctx, phases, dry_run, limit):
+def apply(ctx, phases, dry_run, limit, debug):
     """Phase 3: Apply renames, moves, and NFO writes."""
     cfg = _load_config(ctx.obj["config_path"])
     _setup(cfg)
+    if debug:
+        import logging as _logging
+        _logging.getLogger().setLevel(_logging.DEBUG)
 
     if not dry_run:
         console.print(
@@ -360,13 +364,26 @@ def apply(ctx, phases, dry_run, limit):
         sys.exit(1)
 
     from src.applier import run as do_apply
-    stats = do_apply(
-        movies_output=movies_out,
-        tv_output=tv_out,
-        phases=list(phases),
-        dry_run=dry_run,
-        limit=limit,
-    )
+    ssh_cfg = cfg.get("ssh", {})
+    apply_fn = cleanup = None
+    if ssh_cfg.get("enabled"):
+        from src.ssh_applier import session_from_config, apply_one_ssh
+        session = session_from_config(ssh_cfg)
+        apply_fn = lambda row, mo, tv, dr, nfos, dbg_cb=None: apply_one_ssh(row, mo, tv, dr, nfos, session)
+        cleanup = session.close
+    try:
+        stats = do_apply(
+            movies_output=movies_out,
+            tv_output=tv_out,
+            phases=list(phases),
+            dry_run=dry_run,
+            limit=limit,
+            apply_fn=apply_fn,
+            debug=debug,
+        )
+    finally:
+        if cleanup:
+            cleanup()
 
     table = Table(title=f"Apply Results ({'DRY RUN' if dry_run else 'LIVE'})", box=box.ROUNDED)
     table.add_column("Result", style="cyan")
@@ -483,6 +500,83 @@ def duplicates(ctx):
             console.print("[green]Keeping all copies.[/green]")
         else:
             console.print("[dim]Skipped — decide later.[/dim]")
+
+
+# ─── re-identify ──────────────────────────────────────────────────────────────
+
+@cli.command("re-identify")
+@click.option("--status", "statuses", multiple=True,
+              type=click.Choice(["needs_manual", "needs_llm", "error"]),
+              default=["needs_manual", "needs_llm", "error"],
+              show_default=True,
+              help="Which statuses to reset (can specify multiple times)")
+@click.pass_context
+def re_identify(ctx, statuses):
+    """Reset unidentified files to pending so identify can be re-run on them."""
+    cfg = _load_config(ctx.obj["config_path"])
+    _setup(cfg)
+
+    from src import db
+
+    rows = db.get_media_by_status(list(statuses))
+    if not rows:
+        console.print("[yellow]No files with the selected statuses.[/yellow]")
+        return
+
+    ids = [r["id"] for r in rows]
+    status_summary = ", ".join(statuses)
+    console.print(f"Resetting [bold]{len(ids)}[/bold] files ({status_summary}) → pending")
+    if not click.confirm("Continue?"):
+        console.print("Aborted.")
+        return
+
+    count = db.reset_media_to_pending(ids)
+    console.print(f"[green]Reset {count} files to pending. Run 'identify' to retry.[/green]")
+
+
+# ─── purge-missing ────────────────────────────────────────────────────────────
+
+@cli.command("purge-missing")
+@click.option("--dry-run/--no-dry-run", default=True, show_default=True,
+              help="Preview deletions without removing DB records")
+@click.pass_context
+def purge_missing(ctx, dry_run):
+    """Remove DB records for media files that no longer exist on disk."""
+    cfg = _load_config(ctx.obj["config_path"])
+    _setup(cfg)
+
+    from src import db
+
+    all_rows = db.get_all_media_paths()
+    missing = [r for r in all_rows if not Path(r["original_path"]).exists()]
+
+    if not missing:
+        console.print("[green]All media files accounted for — nothing to purge.[/green]")
+        return
+
+    table = Table(
+        title=f"Missing Files ({'DRY RUN — no changes' if dry_run else 'WILL BE DELETED'})",
+        box=box.ROUNDED,
+    )
+    table.add_column("DB ID", width=6)
+    table.add_column("Path")
+    for r in missing:
+        table.add_row(str(r["id"]), r["original_path"])
+    console.print(table)
+
+    if dry_run:
+        console.print(f"[yellow]{len(missing)} records would be removed. "
+                      f"Re-run with --no-dry-run to delete.[/yellow]")
+        return
+
+    if not click.confirm(f"Permanently delete {len(missing)} DB records?"):
+        console.print("Aborted.")
+        return
+
+    for r in missing:
+        db.delete_media_file(r["id"])
+
+    console.print(f"[green]Removed {len(missing)} records for missing files.[/green]")
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────

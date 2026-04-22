@@ -83,9 +83,15 @@
         </div>
       </div>
       <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end">
-        <button class="btn btn-primary" id="btn-llm" onclick="Pipeline.startLlm()">
-          <i data-lucide="bot"></i> Run LLM Pass
-        </button>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn btn-primary" id="btn-llm" onclick="Pipeline.startLlm()">
+            <i data-lucide="bot"></i> Run LLM Pass
+          </button>
+          <button class="btn btn-secondary" id="btn-llm-cancel"
+                  onclick="Pipeline.cancelLlm()" style="display:none">
+            <i data-lucide="x"></i> Cancel
+          </button>
+        </div>
         <div id="llm-provider-info" class="text-muted" style="font-size:11px;text-align:right"></div>
       </div>
     </div>
@@ -101,8 +107,67 @@
       <div class="progress-bar-wrap">
         <div class="progress-track"><div class="progress-fill" id="llm-bar" style="width:0%"></div></div>
         <div class="progress-meta"><span id="llm-meta-l"></span><span id="llm-meta-r"></span></div>
+        <div id="llm-stall-indicator" style="display:none;font-size:12px;color:var(--yellow);margin-top:4px">
+          <span class="running-dot"></span> Waiting for LLM response...
+        </div>
       </div>
       <div class="log-output" id="log-llm"></div>
+    </div>
+  </div>
+
+  <!-- Re-identify -->
+  <div class="phase-card" id="card-reidentify">
+    <div class="phase-header">
+      <div class="phase-info">
+        <div class="phase-num" style="background:linear-gradient(135deg,var(--accent),#1e3a5f)">↺</div>
+        <div>
+          <div class="phase-title">Re-Identify</div>
+          <div class="phase-desc">Reset unidentified files back to pending so Phase 1 can try again. Useful after path parsing improvements or API fixes.</div>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end">
+        <button class="btn btn-secondary" id="btn-reidentify" onclick="Pipeline.startReIdentify()">
+          <i data-lucide="refresh-cw"></i> Reset &amp; Re-Identify
+        </button>
+        <div style="display:flex;gap:12px;font-size:12px;color:var(--text-2)">
+          <label style="display:flex;gap:5px;align-items:center;cursor:pointer">
+            <input type="checkbox" class="checkbox" id="reid-manual" checked> needs_manual
+          </label>
+          <label style="display:flex;gap:5px;align-items:center;cursor:pointer">
+            <input type="checkbox" class="checkbox" id="reid-llm" checked> needs_llm
+          </label>
+          <label style="display:flex;gap:5px;align-items:center;cursor:pointer">
+            <input type="checkbox" class="checkbox" id="reid-error" checked> error
+          </label>
+        </div>
+      </div>
+    </div>
+    <div class="progress-section" id="progress-reidentify" style="display:none">
+      <div class="log-output" id="log-reidentify"></div>
+    </div>
+  </div>
+
+  <!-- Purge Missing -->
+  <div class="phase-card" id="card-purge">
+    <div class="phase-header">
+      <div class="phase-info">
+        <div class="phase-num" style="background:linear-gradient(135deg,var(--yellow),#78350f)">✕</div>
+        <div>
+          <div class="phase-title">Purge Missing Files</div>
+          <div class="phase-desc">Find database records whose files no longer exist on disk and remove them. Always preview first.</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-secondary" id="btn-purge-dry" onclick="Pipeline.startPurge(true)">
+          <i data-lucide="eye"></i> Preview
+        </button>
+        <button class="btn btn-danger" id="btn-purge-live" onclick="Pipeline.confirmPurge()">
+          <i data-lucide="trash-2"></i> Purge
+        </button>
+      </div>
+    </div>
+    <div class="progress-section" id="progress-purge" style="display:none">
+      <div class="log-output" id="log-purge"></div>
     </div>
   </div>
 
@@ -192,6 +257,26 @@
 
 </div>
 
+<!-- Confirm Purge Modal -->
+<div class="modal-overlay" id="confirm-purge-modal">
+  <div class="modal" style="width:420px">
+    <div class="modal-header">
+      <span class="modal-title" style="color:var(--red)">⚠ Confirm Purge</span>
+      <button class="btn btn-ghost btn-sm" onclick="Pipeline.closePurgeConfirm()"><i data-lucide="x"></i></button>
+    </div>
+    <div class="modal-body" style="color:var(--text-2);line-height:1.6;font-size:13px">
+      <p>This will <strong style="color:var(--text)">permanently delete database records</strong> for files that no longer exist on disk. The files themselves are already gone — only the DB entries are removed.</p>
+      <p style="margin-top:12px">Run <strong>Preview</strong> first to see what will be removed.</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="Pipeline.closePurgeConfirm()">Cancel</button>
+      <button class="btn btn-danger" onclick="Pipeline.startPurge(false); Pipeline.closePurgeConfirm()">
+        <i data-lucide="trash-2"></i> Purge for Real
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- Confirm Apply Modal -->
 <div class="modal-overlay" id="confirm-apply-modal">
   <div class="modal" style="width:420px">
@@ -214,6 +299,10 @@
 
 <script>
 const Pipeline = {
+  _llmEs: null,
+  _llmJobId: null,
+  _llmStallTimer: null,
+
   async init() {
     await App._ready;
     const cfg = App.config;
@@ -270,13 +359,74 @@ const Pipeline = {
     if (!document.getElementById('btn-llm').dataset.orig)
       document.getElementById('btn-llm').dataset.orig = document.getElementById('btn-llm').innerHTML;
     Pipeline.setButtonRunning('btn-llm', true);
+    document.getElementById('btn-llm-cancel').style.display = '';
     document.getElementById('progress-llm').style.display = '';
     Pipeline.clearLog('log-llm');
-    Pipeline.runJob('/api/jobs/llm', {}, {
+    Pipeline.runLlmJob('/api/jobs/llm', {}, {
       bar: 'llm-bar', pctEl: 'llm-pct', headEl: 'llm-headline',
       metaL: 'llm-meta-l', metaR: 'llm-meta-r', logEl: 'log-llm',
       btnId: 'btn-llm',
     });
+  },
+
+  runLlmJob(url, body, els) {
+    fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                 body: JSON.stringify(body) })
+      .then(r => r.json())
+      .then(data => {
+        Pipeline._llmJobId = data.job_id;
+        const es = new EventSource(`/stream/${data.job_id}`);
+        Pipeline._llmEs = es;
+        Pipeline._resetStallTimer();
+        es.onmessage = (e) => {
+          const msg = JSON.parse(e.data);
+          if (msg.type === 'progress') Pipeline._resetStallTimer();
+          Pipeline.handleEvent(msg, els);
+          if (msg.type === 'complete' || msg.type === 'done' || msg.type === 'error') {
+            Pipeline._llmDone();
+          }
+        };
+        es.onerror = () => {
+          es.close();
+          Pipeline._llmDone();
+          Pipeline.setButtonRunning(els.btnId, false);
+          App.toast('Connection lost', 'error');
+        };
+      })
+      .catch(err => {
+        App.toast('Failed to start job: ' + err, 'error');
+        Pipeline._llmDone();
+        Pipeline.setButtonRunning(els.btnId, false);
+      });
+  },
+
+  _resetStallTimer() {
+    clearTimeout(Pipeline._llmStallTimer);
+    document.getElementById('llm-stall-indicator').style.display = 'none';
+    Pipeline._llmStallTimer = setTimeout(() => {
+      document.getElementById('llm-stall-indicator').style.display = '';
+    }, 8000);
+  },
+
+  _llmDone() {
+    clearTimeout(Pipeline._llmStallTimer);
+    document.getElementById('llm-stall-indicator').style.display = 'none';
+    document.getElementById('btn-llm-cancel').style.display = 'none';
+    Pipeline._llmEs = null;
+    Pipeline._llmJobId = null;
+  },
+
+  cancelLlm() {
+    const jobId = Pipeline._llmJobId;
+    if (!jobId) return;
+    fetch(`/api/jobs/${jobId}/cancel`, { method: 'POST' });
+    if (Pipeline._llmEs) { Pipeline._llmEs.close(); Pipeline._llmEs = null; }
+    Pipeline._llmDone();
+    Pipeline.setButtonRunning('btn-llm', false);
+    const btn = document.getElementById('btn-llm');
+    if (btn && btn.dataset.orig) btn.innerHTML = btn.dataset.orig;
+    lucide.createIcons();
+    Pipeline.appendLog('log-llm', 'Cancelled by user.', 'warning');
   },
 
   getPhases() {
@@ -296,6 +446,40 @@ const Pipeline = {
       metaL: 'apply-meta-l', metaR: 'apply-meta-r', logEl: 'log-apply',
     });
     if (dry_run) App.toast('Running dry run preview...', 'info');
+  },
+
+  startReIdentify() {
+    const statuses = [];
+    if (document.getElementById('reid-manual').checked) statuses.push('needs_manual');
+    if (document.getElementById('reid-llm').checked)    statuses.push('needs_llm');
+    if (document.getElementById('reid-error').checked)  statuses.push('error');
+    if (!statuses.length) { App.toast('Select at least one status to reset', 'warning'); return; }
+    const btn = document.getElementById('btn-reidentify');
+    if (!btn.dataset.orig) btn.dataset.orig = btn.innerHTML;
+    Pipeline.setButtonRunning('btn-reidentify', true);
+    document.getElementById('progress-reidentify').style.display = '';
+    Pipeline.clearLog('log-reidentify');
+    Pipeline.runJob('/api/jobs/re-identify', { statuses }, {
+      logEl: 'log-reidentify', btnId: 'btn-reidentify',
+    });
+  },
+
+  startPurge(dry_run) {
+    document.getElementById('progress-purge').style.display = '';
+    Pipeline.clearLog('log-purge');
+    Pipeline.runJob('/api/jobs/purge-missing', { dry_run }, {
+      logEl: 'log-purge',
+    });
+    if (dry_run) App.toast('Previewing missing files...', 'info');
+  },
+
+  confirmPurge() {
+    document.getElementById('confirm-purge-modal').classList.add('open');
+    lucide.createIcons();
+  },
+
+  closePurgeConfirm() {
+    document.getElementById('confirm-purge-modal').classList.remove('open');
   },
 
   confirmApply() {
@@ -365,9 +549,11 @@ const Pipeline = {
         const color = { identified:'var(--green)', confirmed:'var(--green)',
                         needs_llm:'var(--accent-l)', needs_manual:'var(--yellow)',
                         skipped:'var(--text-4)', error:'var(--red)' }[msg.result] || 'var(--text-2)';
+        const suffix = (msg.result === 'skipped' && msg.skip_reason)
+          ? ` — ${msg.skip_reason}` : (msg.confidence ? ` (${msg.confidence}%)` : '');
         Pipeline.appendLog(els.logEl,
-          `${msg.filename} → <span style="color:${color}">${msg.result}${msg.confidence ? ` (${msg.confidence}%)` : ''}</span>`,
-          'info');
+          `${msg.filename} → <span style="color:${color}">${msg.result}</span>${suffix}`,
+          msg.result === 'skipped' ? 'warning' : 'info');
       }
     }
     if (msg.type === 'stats') {

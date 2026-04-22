@@ -11,7 +11,10 @@ We use the `openai` Python package with a custom base_url for all of them.
 import json
 import logging
 import re
+from pathlib import Path
 from typing import Callable, Optional
+
+import os
 
 import requests
 
@@ -48,7 +51,7 @@ Return ONLY a valid JSON array — no markdown, no explanation, no code fences. 
 - "episode": episode number for TV episodes as integer (null for movies or if unknown)
 - "skip": true ONLY if you genuinely cannot identify this file
 
-Use the filename, parent folder name, year, and type hints as clues. Be confident when you know—do not skip obvious titles."""
+Each file includes a relative_path showing the full folder structure from the library root (e.g. "Show Name/Season 1/Episode 1 - Title.mkv"). Use all path components — show name folder, season folder, and filename — as clues. If you have web search available, use it to look up ambiguous titles on TMDB or IMDb. Be confident when you know — do not skip obvious titles."""
 
 
 # ─── Provider detection ───────────────────────────────────────────────────────
@@ -145,6 +148,9 @@ def run_llm_pass(
     batch_size: int = 20,
     tmdb=None,
     progress_cb: Optional[Callable] = None,
+    stop_event=None,
+    batch_cb: Optional[Callable] = None,
+    llm_timeout: int = 120,
 ) -> dict:
     """
     Run LLM identification on a list of media_files DB rows.
@@ -160,17 +166,33 @@ def run_llm_pass(
 
     base_url = _resolve_endpoint(provider, endpoint)
     key = api_key or _PROVIDER_DEFAULT_KEY.get(provider, "sk-placeholder")
-    client = OpenAI(base_url=base_url, api_key=key)
+    client = OpenAI(base_url=base_url, api_key=key, timeout=llm_timeout)
 
     stats = {"confirmed": 0, "skipped": 0, "errors": 0, "processed": 0}
     total = len(files)
 
+    use_ollama_search = (
+        provider == "ollama"
+        and bool(os.environ.get("OLLAMA_API_KEY"))
+    )
+
+    total_batches = (total + batch_size - 1) // batch_size
+
     for batch_start in range(0, total, batch_size):
+        if stop_event and stop_event.is_set():
+            stats["cancelled"] = True
+            break
+        batch_num = batch_start // batch_size + 1
+        if batch_cb:
+            batch_cb(batch_num, total_batches)
         batch = files[batch_start : batch_start + batch_size]
         batch_input = _build_batch_input(batch)
 
         try:
-            results = _call_llm(client, model, batch_input)
+            if use_ollama_search:
+                results = _call_llm_ollama_search(model, batch_input)
+            else:
+                results = _call_llm(client, model, batch_input)
         except Exception as e:
             logger.error("LLM batch error: %s", e)
             for row in batch:
@@ -252,6 +274,7 @@ def _build_batch_input(batch) -> list[dict]:
     return [
         {
             "id": row["id"],
+            "relative_path": _relative_path(row["original_path"]),
             "filename": row["filename"],
             "parent_folder": row["parent_folder"] or "",
             "guessed_title": row["guessed_title"] or "",
@@ -262,6 +285,74 @@ def _build_batch_input(batch) -> list[dict]:
         }
         for row in batch
     ]
+
+
+def _relative_path(original_path: str) -> str:
+    """Strip drive/UNC root so the LLM sees 'Show/Season 1/ep.mkv' not 'D:\\...'."""
+    try:
+        p = Path(original_path)
+        return str(p.relative_to(p.anchor)).replace("\\", "/")
+    except Exception:
+        return original_path
+
+
+def _call_llm_ollama_search(model: str, batch_input: list) -> list[dict]:
+    """
+    Ollama-native chat with web_search tool enabled.
+    Requires OLLAMA_API_KEY to be set and the ollama package installed.
+    Drives the tool-call loop until the model returns a final text response.
+    """
+    import ollama
+
+    api_key = os.environ["OLLAMA_API_KEY"]
+    client = ollama.Client(host="http://localhost:11434", headers={"Authorization": f"Bearer {api_key}"})
+
+    user_content = json.dumps(batch_input, ensure_ascii=False)
+    messages = [
+        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "user", "content": f"Identify these media files and return a JSON array:\n{user_content}"},
+    ]
+
+    for attempt in range(2):
+        current_messages = list(messages)
+        content = ""
+        for _ in range(10):  # guard against infinite tool loops
+            resp = client.chat(
+                model=model,
+                messages=current_messages,
+                tools=[client.web_search],
+            )
+            msg = resp.message
+            if msg.tool_calls:
+                current_messages.append(msg)
+                for tc in msg.tool_calls:
+                    args = tc.function.arguments or {}
+                    tool_result = client.web_search(**args)
+                    current_messages.append({
+                        "role": "tool",
+                        "content": json.dumps(tool_result.model_dump()),
+                    })
+            else:
+                content = (msg.content or "").strip()
+                break
+
+        fenced = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", content, re.DOTALL)
+        if fenced:
+            content = fenced.group(1)
+        start = content.find("[")
+        end = content.rfind("]") + 1
+        if start >= 0 and end > start:
+            content = content[start:end]
+
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError as e:
+            if attempt == 0:
+                logger.warning("Ollama search LLM returned invalid JSON (attempt 1): %s", e)
+                continue
+            raise ValueError(f"Ollama search LLM returned unparseable JSON after retry: {e}")
+
+    return []
 
 
 def _call_llm(client, model: str, batch_input: list) -> list[dict]:

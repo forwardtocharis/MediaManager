@@ -695,6 +695,7 @@ tr:hover td { background: var(--surface-2); }
 .log-line.error   .log-msg { color: var(--red); }
 .log-line.warning .log-msg { color: var(--yellow); }
 .log-line.info    .log-msg { color: var(--text-2); }
+.log-line.debug   .log-msg { color: #b57bee; font-size: 11px; font-family: monospace; }
 
 /* ─── Phase cards (pipeline) ───────────────────────────────────────────────── */
 .phase-grid { display: grid; gap: 20px; }

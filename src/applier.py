@@ -92,13 +92,22 @@ def run(
     phases: list[str],
     dry_run: bool = True,
     limit: Optional[int] = None,
+    apply_fn=None,
+    debug: bool = False,
 ) -> dict:
     """
     Apply file renames/moves and metadata writes.
 
     phases: list of '1', '2', 'manual', or ['all']
     dry_run: if True, print what would happen but don't write anything.
+    debug: if True, print verbose per-file trace to console.
     """
+    if apply_fn is None:
+        apply_fn = _apply_one
+
+    if debug:
+        console.print("[bold magenta]DEBUG MODE ON — verbose per-file tracing enabled[/bold magenta]\n")
+
     if dry_run:
         console.print("[bold yellow]DRY RUN — no files will be modified.[/bold yellow]\n")
     else:
@@ -111,6 +120,8 @@ def run(
         phase_nums = {int(p) if p.isdigit() else (3 if p == "manual" else int(p))
                       for p in phases}
 
+    logger.debug("Querying phases %s", phase_nums)
+
     # Fetch identified rows for the requested phases
     with db.connect() as conn:
         placeholders = ",".join("?" * len(phase_nums))
@@ -121,20 +132,53 @@ def run(
             list(phase_nums)
         ).fetchall()
 
+    logger.debug("Query returned %d rows with status='identified'", len(rows))
+
+    if debug:
+        console.print(f"[magenta]DBG run():[/magenta] phases arg={phases!r}  resolved phase_nums={phase_nums}")
+        console.print(f"[magenta]DBG run():[/magenta] movies_output={movies_output!r}  tv_output={tv_output!r}")
+        console.print(f"[magenta]DBG run():[/magenta] dry_run={dry_run}  limit={limit}")
+        console.print(f"[magenta]DBG run():[/magenta] {len(rows)} rows with status='identified' in phases {phase_nums}")
+
     if limit:
         rows = rows[:limit]
+        if debug:
+            console.print(f"[magenta]DBG run():[/magenta] limited to {len(rows)} rows")
+
+    # Report any files in the requested phases that aren't ready to apply
+    with db.connect() as conn:
+        other_rows = conn.execute(
+            f"SELECT status, COUNT(*) as n FROM media_files "
+            f"WHERE status NOT IN ('identified','applied') AND phase IN ({placeholders}) "
+            f"GROUP BY status ORDER BY status",
+            list(phase_nums)
+        ).fetchall()
+    if other_rows:
+        console.print("[dim]Files in requested phases not ready to apply:[/dim]")
+        for r in other_rows:
+            console.print(f"  [dim]{r['status']:20s}  {r['n']} file(s)[/dim]")
+        console.print()
 
     if not rows:
-        console.print("[yellow]No identified files ready to apply for the requested phases.[/yellow]")
+        # Diagnose why there are no rows
+        with db.connect() as conn:
+            all_statuses = conn.execute(
+                f"SELECT status, phase, COUNT(*) as n FROM media_files "
+                f"WHERE phase IN ({placeholders}) GROUP BY status, phase ORDER BY status, phase",
+                list(phase_nums)
+            ).fetchall()
+        if all_statuses:
+            console.print("[yellow]No identified files ready to apply for the requested phases.[/yellow]")
+            console.print("[dim]Files in those phases by status:[/dim]")
+            for r in all_statuses:
+                console.print(f"  [dim]phase={r['phase']}  status={r['status']:20s}  {r['n']} file(s)[/dim]")
+        else:
+            console.print("[yellow]No identified files ready to apply for the requested phases.[/yellow]")
+            console.print(f"[dim]No files found at all for phases {phase_nums}. "
+                          f"Have you run 'scan' and 'identify'?[/dim]")
         return {"processed": 0, "applied": 0, "skipped": 0, "errors": 0}
 
-    stats = {"processed": 0, "applied": 0, "skipped": 0, "errors": 0}
-
-    # For dry-run, show a preview table and return stats (nothing was written)
-    if dry_run:
-        if len(rows) <= 50:
-            _show_preview_table(rows, movies_output, tv_output)
-        return {"processed": len(rows), "applied": 0, "skipped": 0, "errors": 0}
+    stats = {"processed": 0, "applied": 0, "skipped": 0, "errors": 0, "skip_reasons": {}}
 
     with Progress(
         SpinnerColumn(),
@@ -152,26 +196,52 @@ def run(
             progress.advance(task)
             stats["processed"] += 1
 
-            try:
-                applied = _apply_one(
-                    row, movies_output, tv_output,
-                    dry_run, written_show_nfos
+            if debug:
+                console.print(
+                    f"\n[magenta]──── [{stats['processed']}/{len(rows)}] {row['filename']} ────[/magenta]"
                 )
-                if applied:
+
+            def _debug_cb(msg, _row=row):
+                if debug:
+                    console.print(f"  [magenta dim]DBG:[/magenta dim] {msg}")
+                logger.debug("[%s] %s", _row["filename"], msg)
+
+            try:
+                result = apply_fn(
+                    row, movies_output, tv_output,
+                    dry_run, written_show_nfos, _debug_cb
+                )
+                if result is True:
                     stats["applied"] += 1
+                    if debug:
+                        console.print(f"  [green]APPLIED[/green]")
                 else:
                     stats["skipped"] += 1
+                    reason = result if isinstance(result, str) else "unknown"
+                    stats["skip_reasons"][reason] = stats["skip_reasons"].get(reason, 0) + 1
+                    console.print(f"  [yellow]SKIP[/yellow] {row['filename']}: {reason}")
             except Exception as e:
                 logger.error("Error applying %s: %s", row["filename"], e)
                 db.update_media_file(row["id"], status="error", notes=str(e))
                 stats["errors"] += 1
+                if debug:
+                    console.print(f"  [red]ERROR:[/red] {e}")
+
+    if stats["skipped"] and stats["skip_reasons"]:
+        console.print("\n[yellow]Skip reasons:[/yellow]")
+        for reason, count in sorted(stats["skip_reasons"].items(), key=lambda x: -x[1]):
+            console.print(f"  [dim]{count}x[/dim] {reason}")
 
     return stats
 
 
 def _apply_one(row, movies_output: str, tv_output: str,
-               dry_run: bool, written_show_nfos: set) -> bool:
-    """Apply changes for a single media file. Returns True if applied."""
+               dry_run: bool, written_show_nfos: set, debug_cb=None):
+    """Apply changes for a single media file. Returns True if applied, or a reason string if skipped."""
+    def dbg(msg):
+        if debug_cb:
+            debug_cb(msg)
+
     media_id = row["id"]
     src = Path(row["original_path"])
     media_type = row["confirmed_type"]
@@ -180,17 +250,43 @@ def _apply_one(row, movies_output: str, tv_output: str,
     ext = row["extension"]
     is_extra = bool(row["is_extra"])
 
-    if not src.exists():
-        reason = "Source file not found (already moved or deleted)"
+    dbg(f"id={media_id}  src={src!r}")
+    dbg(f"type={media_type!r}  title={title!r}  year={year!r}  ext={ext!r}  is_extra={is_extra}")
+    dbg(f"status={row['status']!r}  phase={row['phase']}  confidence={row['confidence']}")
+
+    # ── Guard: type must be confirmed ──
+    if not media_type:
+        reason = "confirmed_type is NULL — file was never fully identified"
         logger.warning("%s: skipped — %s", src.name, reason)
         db.update_media_file(media_id, status="skipped", notes=reason)
-        return False
+        dbg(f"SKIP — {reason}")
+        return reason
+
+    # ── Guard: title must exist ──
+    if not title:
+        reason = "confirmed_title is NULL — file was never fully identified"
+        logger.warning("%s: skipped — %s", src.name, reason)
+        db.update_media_file(media_id, status="skipped", notes=reason)
+        dbg(f"SKIP — {reason}")
+        return reason
+
+    # ── Guard: source file must exist on disk ──
+    dbg(f"Checking source exists: {src!r}")
+    if not src.exists():
+        reason = f"Source file not found at {src!r}"
+        logger.warning("%s: skipped — %s", src.name, reason)
+        db.update_media_file(media_id, status="skipped", notes=reason)
+        dbg(f"SKIP — {reason}")
+        return reason
+
+    dbg(f"source exists ✓  (size={src.stat().st_size} bytes)")
 
     # ── Build destination path ──
     if media_type == "movie":
+        dbg(f"Building movie path: movies_output={movies_output!r}  title={title!r}  year={year!r}  is_extra={is_extra}")
         if is_extra:
-            # Use the stem of the main movie name as extra base
             extra_name = _extract_extra_name(src.stem, title, year)
+            dbg(f"Extra name resolved to: {extra_name!r}")
             dst = build_movie_extra_path(movies_output, title, year, extra_name, ext)
         else:
             dst = build_movie_path(movies_output, title, year, ext)
@@ -198,31 +294,41 @@ def _apply_one(row, movies_output: str, tv_output: str,
         season = row["season"] or row["guessed_season"] or 1
         episode = row["episode"] or row["guessed_episode"] or 1
         ep_title = row["episode_title"] or ""
+        dbg(f"Building TV path: tv_output={tv_output!r}  title={title!r}  S{season}E{episode}  ep_title={ep_title!r}")
+        dbg(f"  season source: confirmed={row['season']!r}  guessed={row['guessed_season']!r}  used={season}")
+        dbg(f"  episode source: confirmed={row['episode']!r}  guessed={row['guessed_episode']!r}  used={episode}")
         dst = build_tv_episode_path(tv_output, title, season, episode, ep_title, ext)
     else:
-        reason = f"Unknown/unconfirmed type '{media_type}'"
+        reason = f"Unrecognised confirmed_type={media_type!r} — expected 'movie' or 'tv'"
         logger.warning("%s: skipped — %s", src.name, reason)
         db.update_media_file(media_id, status="skipped", notes=reason)
-        return False
+        dbg(f"SKIP — {reason}")
+        return reason
 
+    dbg(f"raw dst={dst!r}")
     dst = ensure_unique_path(dst)
+    dbg(f"unique dst={dst!r}")
 
     # ── Store proposed path ──
     db.update_media_file(media_id, proposed_path=str(dst))
 
     if dry_run:
         console.print(f"  [dim]{src.name}[/dim]\n  -> [cyan]{dst}[/cyan]\n")
+        dbg(f"dry_run=True — no files written")
         return True
 
     # ── Copy → verify ──
+    dbg(f"Copying {src!r} -> {dst!r}")
     manifest_id = db.log_manifest_op(media_id, "media", str(src), str(dst), "copy")
     success = safe_copy(src, dst, verify=True)
     if not success:
         console.print(f"[red]Copy verification failed for {src.name}[/red]")
         db.update_media_file(media_id, status="error",
                              notes="Copy verification (size mismatch)")
+        dbg("FAIL — copy size verification failed")
         return False
     db.mark_manifest_verified(manifest_id)
+    dbg(f"Copy verified ✓")
 
     # ── Write NFO sidecar ──
     _write_nfo(row, dst, media_type, tv_output, written_show_nfos, dry_run)

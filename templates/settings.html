@@ -36,6 +36,9 @@
     <div class="settings-nav-item" data-section="ssh" onclick="Settings.showSection('ssh')">
       <i data-lucide="terminal"></i> SSH / NAS
     </div>
+    <div class="settings-nav-item" data-section="advanced" onclick="Settings.showSection('advanced')">
+      <i data-lucide="bug"></i> Advanced
+    </div>
   </div>
 
   <!-- Content -->
@@ -308,6 +311,23 @@
       </div>
     </div>
 
+    <!-- Advanced -->
+    <div class="settings-section" id="section-advanced">
+      <div>
+        <div class="settings-section-title">Advanced</div>
+        <div class="settings-section-desc">Diagnostic tools. Enable debug mode to see exhaustive per-file logging in the Pipeline view.</div>
+      </div>
+      <div class="settings-card">
+        <div class="form-group">
+          <label class="form-label" style="display:flex;align-items:center;gap:10px">
+            <input type="checkbox" id="debug_mode" style="width:16px;height:16px;accent-color:var(--accent)">
+            Enable debug mode
+          </label>
+          <div class="form-hint">When on, every apply operation emits detailed step-by-step logs in the Pipeline — path translation, SSH existence checks, destination paths, and exact skip reasons. Turn off for normal use.</div>
+        </div>
+      </div>
+    </div>
+
   </div>
 </div>
 
@@ -376,6 +396,9 @@ const Settings = {
     document.getElementById('ssh_password').placeholder = sh.password ? '(configured)' : 'leave blank if using key';
     Settings.setVal('ssh_key_path', sh.key_path || '');
     Settings._renderPathMap(sh.path_map || {});
+
+    const adv = cfg.advanced || {};
+    document.getElementById('debug_mode').checked = !!adv.debug_mode;
   },
 
   setVal(id, val) {
@@ -521,6 +544,10 @@ const Settings = {
       path_map: Settings._collectPathMap(),
     };
     if (sshPassword) cfg.ssh.password = sshPassword;
+
+    cfg.advanced = {
+      debug_mode: document.getElementById('debug_mode').checked,
+    };
 
     const res = await App.api.post('/api/config', cfg);
     if (res.ok) {

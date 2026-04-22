@@ -120,6 +120,10 @@ def parse_filename(filepath: str | Path, use_parent_folder: bool = True) -> dict
         except Exception:
             pass
 
+    # Fallback: walk ancestor folders to fill gaps guessit left null.
+    # Handles structures like: [Show Name]\Season 1\Episode 1 - Title.mkv
+    _fill_from_path(path, guess)
+
     # Normalize media type
     raw_type = guess.get("type", "")
     if raw_type == "movie":
@@ -148,6 +152,42 @@ def parse_filename(filepath: str | Path, use_parent_folder: bool = True) -> dict
         "extra": is_extra(filepath),
         "raw_guess": guess,
     }
+
+
+_SEASON_FOLDER_RE = re.compile(r"^season\s*(\d+)$", re.IGNORECASE)
+_EPISODE_FILE_RE = re.compile(r"^episode\s*(\d+)", re.IGNORECASE)
+
+
+def _fill_from_path(path: Path, guess: dict) -> None:
+    """
+    Fill missing season/episode/title in `guess` by inspecting ancestor folders.
+    Only sets values that guessit left null — never overwrites existing ones.
+    """
+    parts = path.parts  # e.g. ['Show Name', 'Season 1', 'Episode 1 - Title.mkv']
+
+    for i, part in enumerate(parts):
+        # Season from a folder named "Season N" or "S0N"
+        if guess.get("season") is None:
+            m = _SEASON_FOLDER_RE.match(part)
+            if m:
+                guess["season"] = int(m.group(1))
+
+        # Show title from any ancestor that isn't a season folder and isn't the filename
+        if guess.get("title") is None and i < len(parts) - 1:
+            if not _SEASON_FOLDER_RE.match(part):
+                try:
+                    folder_guess = dict(guessit(part))
+                    if folder_guess.get("title"):
+                        guess["title"] = folder_guess["title"]
+                        guess.setdefault("year", folder_guess.get("year"))
+                except Exception:
+                    pass
+
+    # Episode number from filename stem starting with "Episode N"
+    if guess.get("episode") is None:
+        m = _EPISODE_FILE_RE.match(path.stem)
+        if m:
+            guess["episode"] = int(m.group(1))
 
 
 def _clean_title(title: str) -> str:
