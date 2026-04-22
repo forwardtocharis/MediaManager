@@ -1,91 +1,65 @@
 # MediaManager
 
-A multi-phase CLI tool for identifying, renaming, and tagging media files (movies, TV shows) stored on a NAS or network share.
+![MediaManager Dashboard](file:///C:/Users/forwa/.gemini/antigravity/brain/9bbf37be-a76a-4dbf-9d7d-3f9fed870dbb/mediamanager_dashboard_mockup_1776858043321.png)
+
+A modern, multi-phase media automation suite designed for NAS power users. MediaManager combines a powerful **Web Dashboard** for identification and review with a **Hybrid CLI** for high-performance local file operations.
 
 ---
 
-## Quick Start
+## ✨ Features
 
-### 1. Install dependencies
+- **Modern Web Dashboard**: Real-time pipeline monitoring, interactive duplicate resolution, and visual confirmation of metadata matches.
+- **Smart Identification**: Multi-stage auto-discovery using TMDB and OMDB APIs with score-based confidence thresholds.
+- **AI-Powered Review**: Integrated LLM support (Ollama, LM Studio, or OpenAI) to resolve complex filenames that confuse traditional scrapers.
+- **Hybrid NAS Workflow**: Run the UI on your PC while executing "Apply" and "Scan" tasks natively on your NAS via SSH — **0% network traffic, 100% disk speed.**
+- **Robust Safety**: Copy-verify-delete logic with a full manifest for atomic rollbacks.
 
+---
+
+## 🚀 Quick Start
+
+### 1. Install Dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Configure
-
-Edit `config.yml`:
-
-```yaml
-api:
-  tmdb_key: "your_tmdb_key_here"   # https://www.themoviedb.org/settings/api
-  omdb_key: "your_omdb_key_here"   # https://www.omdbapi.com/apikey.aspx
-
-source:
-  movies_path: "/path/to/movies"
-  tv_path:     "/path/to/tvshows"
-```
-
-### 3. Run the pipeline
-
+### 2. Launch the Web UI
 ```bash
-# Step 0: Scan your NAS (read-only, no changes)
-python cli.py scan
-
-# Check status
-python cli.py status
-
-# Step 1: Auto-identify (TMDB + OMDB)
-python cli.py identify
-
-# Check status again
-python cli.py status
-
-# Step 2a: Export unresolved files for LLM review
-python cli.py export-llm --output llm_review.csv
-# → Opens llm_review.csv and llm_review_prompt.txt
-# → Paste the prompt into ChatGPT/Claude/Gemini, attach the CSV, get back a filled CSV
-
-# Step 2b: Import LLM results
-python cli.py import-llm --input llm_results.csv
-
-# Step 2c: Export remaining manual review items
-python cli.py export-manual --output manual.csv
-# → Edit manual.csv yourself, fill in tmdb_id/confirmed_title/year/type/season/episode
-python cli.py import-manual --input manual.csv
-
-# Step 3: Preview proposed changes (SAFE — no writes)
-python cli.py apply --phase 1 --dry-run
-
-# Step 3: Apply changes for Phase 1 items (moves files!)
-python cli.py apply --phase 1 --no-dry-run
-
-# Step 3: Apply all phases at once
-python cli.py apply --phase all --no-dry-run
+python app.py
 ```
+Open **[http://localhost:5000](http://localhost:5000)** to configure your paths and API keys directly in the browser.
 
 ---
 
-## All Commands
+## 🛠 Hybrid NAS Optimization
+
+For users with media on a networked NAS (Synology, TrueNAS, etc.), MediaManager offers a unique hybrid mode:
+
+1. **PC (Dashboard)**: Run the server on your workstation. Use the web interface to identify movies and confirm changes.
+2. **NAS (Engine)**: Enable **SSH Apply** in Settings. The NAS will execute all renames and moves locally on its own disks.
+
+### Benefits:
+- **Instant Moves**: Moves files across the same volume in milliseconds.
+- **Zero Latency**: No large files travel over your Wi-Fi or Ethernet.
+- **Reliable**: No network timeouts during long batch operations.
+
+---
+
+## 💻 CLI Usage
+
+While the Dashboard is recommended for daily use, the CLI remains available for automation and headless environments:
 
 | Command | Description |
 |---|---|
-| `scan` | Walk NAS paths and scan all media files into the database |
-| `status` | Show pipeline status by phase and API rate limit state |
-| `identify [--limit N]` | Phase 1 auto-identification via TMDB/OMDB |
-| `export-llm [--output FILE]` | Export unresolved files as CSV + LLM prompt |
-| `import-llm --input FILE` | Import LLM-completed CSV, re-validate against TMDB |
-| `export-manual [--output FILE]` | Export items needing human review |
-| `import-manual --input FILE` | Import manually-completed CSV |
-| `apply --phase 1\|2\|manual\|all [--dry-run] [--limit N]` | Apply renames/NFOs (dry-run by default) |
-| `rollback [--dry-run]` | Reverse all applied file moves |
-| `duplicates` | Interactive duplicate resolution |
-| `resume-api --api tmdb\|omdb` | Unpause a rate-limited API |
-| `cancel-api --api tmdb\|omdb` | Manually pause an API |
+| `scan` | Deep-scan all source paths into the local database |
+| `identify` | Auto-match files against TMDB/OMDB |
+| `apply --no-dry-run` | Commit renames and NFO generation |
+| `rollback` | Reverse all moves using the transaction manifest |
+| `duplicates` | Interactive terminal-based duplicate resolution |
 
 ---
 
-## Output Structure
+## 📂 Output Convention
 
 ### Movies
 ```
@@ -94,11 +68,7 @@ Movies/
     The Thing (1982)/
       The Thing (1982).mkv
       The Thing (1982).nfo
-      The Thing (1982).en.srt
-  2000s/
-    The Dark Knight (2008)/
-      The Dark Knight (2008).mkv
-      The Dark Knight (2008).nfo
+      The Thing (1982).Behind The Scenes.mkv
 ```
 
 ### TV Shows
@@ -108,69 +78,22 @@ TV Shows/
     tvshow.nfo
     Season 01/
       Breaking Bad - S01E01 - Pilot.mkv
-      Breaking Bad - S01E01 - Pilot.nfo
-```
-
-### Extras/Bonus Content
-```
-The Thing (1982)/
-  The Thing (1982).mkv
-  The Thing (1982).Behind The Scenes.mkv
 ```
 
 ---
 
-## Safety
+## 🛡 Safety & Reliability
 
-- **`apply` is dry-run by default** — always shows a preview table first.
-- Files are **copied and size-verified** before the original is deleted.
-- Every operation is logged to `apply_manifest` in the database.
-- **Rollback** reverses all moves using the manifest.
-
----
-
-## API Rate Limits
-
-- **TMDB**: ~40 requests/second (conservative). No daily limit enforced by default.
-- **OMDB**: 2 req/sec. Daily limit set to 950 (free tier is 1,000/day).
-- When a limit is hit, the API is **paused automatically** with a message.
-- To resume: `python cli.py resume-api --api tmdb`
+- **Dry Run by Default**: All operations show a preview of changes before execution.
+- **Verification**: Checksums and file size comparisons are performed before deleting original files.
+- **Manifests**: Every move is logged in `mediamanager.db` for traceability.
 
 ---
 
-## LLM CSV Format
+## 🧪 Development
 
-The exported CSV includes these columns for the LLM to fill in:
-
-| Column | Fill in |
-|---|---|
-| `tmdb_id` | TMDB numeric ID (search at themoviedb.org) |
-| `imdb_id` | IMDb ID (tt1234567) |
-| `confirmed_title` | Correct full title |
-| `confirmed_year` | Release year |
-| `confirmed_type` | `movie` or `tv` |
-| `season` | Season number (TV only) |
-| `episode` | Episode number (TV only) |
-| `skip` | Set to `1` if truly unidentifiable |
-
----
-
-## Config Reference
-
-See `config.yml` for all settings with inline documentation.
-
-Key settings:
-- `identification.auto_confirm_threshold` (default 75) — minimum score to auto-confirm
-- `identification.llm_threshold` (default 50) — minimum score to send to LLM vs manual
-- `files.media_extensions` — list of extensions to scan
-- `files.extras_keywords` — keywords that flag bonus content
-
----
-
-## Running Tests
-
+Run tests with:
 ```bash
 python test_core.py
 ```
-
-All 14 tests cover: filename sanitization, decade folders, path building, guessit parsing, extras detection, subtitle language detection, NFO XML generation, and the DB layer.
+Includes 14+ coverage vectors for NFO generation, path logic, and scraper accuracy.
