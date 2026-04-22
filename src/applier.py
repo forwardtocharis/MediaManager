@@ -222,7 +222,8 @@ def run(
                     console.print(f"  [yellow]SKIP[/yellow] {row['filename']}: {reason}")
             except Exception as e:
                 logger.error("Error applying %s: %s", row["filename"], e)
-                db.update_media_file(row["id"], status="error", notes=str(e))
+                if not dry_run:
+                    db.update_media_file(row["id"], status="error", notes=str(e))
                 stats["errors"] += 1
                 if debug:
                     console.print(f"  [red]ERROR:[/red] {e}")
@@ -258,7 +259,8 @@ def _apply_one(row, movies_output: str, tv_output: str,
     if not media_type:
         reason = "confirmed_type is NULL — file was never fully identified"
         logger.warning("%s: skipped — %s", src.name, reason)
-        db.update_media_file(media_id, status="skipped", notes=reason)
+        if not dry_run:
+            db.update_media_file(media_id, status="skipped", notes=reason)
         dbg(f"SKIP — {reason}")
         return reason
 
@@ -266,7 +268,8 @@ def _apply_one(row, movies_output: str, tv_output: str,
     if not title:
         reason = "confirmed_title is NULL — file was never fully identified"
         logger.warning("%s: skipped — %s", src.name, reason)
-        db.update_media_file(media_id, status="skipped", notes=reason)
+        if not dry_run:
+            db.update_media_file(media_id, status="skipped", notes=reason)
         dbg(f"SKIP — {reason}")
         return reason
 
@@ -275,7 +278,8 @@ def _apply_one(row, movies_output: str, tv_output: str,
     if not src.exists():
         reason = f"Source file not found at {src!r}"
         logger.warning("%s: skipped — %s", src.name, reason)
-        db.update_media_file(media_id, status="skipped", notes=reason)
+        if not dry_run:
+            db.update_media_file(media_id, status="skipped", notes=reason)
         dbg(f"SKIP — {reason}")
         return reason
 
@@ -301,7 +305,8 @@ def _apply_one(row, movies_output: str, tv_output: str,
     else:
         reason = f"Unrecognised confirmed_type={media_type!r} — expected 'movie' or 'tv'"
         logger.warning("%s: skipped — %s", src.name, reason)
-        db.update_media_file(media_id, status="skipped", notes=reason)
+        if not dry_run:
+            db.update_media_file(media_id, status="skipped", notes=reason)
         dbg(f"SKIP — {reason}")
         return reason
 
