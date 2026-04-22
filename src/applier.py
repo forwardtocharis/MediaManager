@@ -237,7 +237,8 @@ def run(
 
 
 def _apply_one(row, movies_output: str, tv_output: str,
-               dry_run: bool, written_show_nfos: set, debug_cb=None):
+               dry_run: bool, written_show_nfos: set, debug_cb=None,
+               subtitle_cfg: dict | None = None):
     """Apply changes for a single media file. Returns True if applied, or a reason string if skipped."""
     def dbg(msg):
         if debug_cb:
@@ -340,6 +341,18 @@ def _apply_one(row, movies_output: str, tv_output: str,
 
     # ── Move subtitles ──
     _move_subtitles(media_id, src, dst, dry_run)
+
+    # ── Apply queued subtitles (download + embed/sidecar) ──
+    if subtitle_cfg and subtitle_cfg.get("enabled") and not dry_run:
+        try:
+            from src.subtitles.applier import apply_subtitle_queue
+            apply_subtitle_queue(
+                media_id, str(dst), subtitle_cfg,
+                session=None, dry_run=dry_run,
+                log_cb=lambda msg, lvl="info": dbg(f"[subtitles] {msg}"),
+            )
+        except Exception as _se:
+            logger.warning("Subtitle apply failed for %s: %s", dst.name, _se)
 
     # ── Delete original ──
     db.log_manifest_op(media_id, "media", str(src), "", "delete")

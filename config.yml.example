@@ -103,3 +103,33 @@ database:
 # ─── Logging ─────────────────────────────────────────────────────────────────
 logging:
   level: INFO   # DEBUG, INFO, WARNING, ERROR
+
+# ─── Subtitles ───────────────────────────────────────────────────────────────
+subtitles:
+  enabled: false
+
+  # Which subtitle providers to use (enable one or more)
+  providers:
+    opensubtitles:
+      enabled: false
+      username: ""       # opensubtitles.com account username
+      password: ""       # opensubtitles.com account password
+      api_key:  ""       # optional — leave blank to use the default public key
+
+    subdl:
+      enabled: false
+      api_key: ""        # https://subdl.com/dashboard → API Key
+
+    podnapisi:
+      enabled: false     # free, no credentials required
+
+  # Preferred languages (ISO 639-1 codes, e.g. en, es, fr, de, ja)
+  # All listed languages will be fetched; the best match per language is used.
+  languages:
+    - en
+
+  # How to store downloaded subtitles:
+  #   sidecar — place .srt alongside the video (Title.en.srt)
+  #   embed   — mux into the container via FFmpeg; error if FFmpeg unavailable
+  #   hybrid  — try embed first; fall back to sidecar on failure (recommended)
+  storage_strategy: hybrid

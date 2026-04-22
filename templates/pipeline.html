@@ -512,12 +512,15 @@ const Pipeline = {
     </div>`;
   },
 
+  _identifyJobId: null,
+
   runJob(url, body, els) {
     fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
                  body: JSON.stringify(body) })
       .then(r => r.json())
       .then(data => {
         const jobId = data.job_id;
+        if (url.includes('/identify')) Pipeline._identifyJobId = jobId;
         const es = new EventSource(`/stream/${jobId}`);
         es.onmessage = (e) => {
           const msg = JSON.parse(e.data);
@@ -581,6 +584,45 @@ const Pipeline = {
     if (msg.type === 'folder_cleanup') {
       Pipeline.showFolderCleanup(msg.data);
     }
+    if (msg.type === 'subtitle_python_missing') {
+      Pipeline._showSubtitlePythonModal(els, msg);
+    }
+  },
+
+  _showSubtitlePythonModal(els, msg) {
+    // Show a dismissible banner in the identify log with action buttons
+    const jobId = Pipeline._identifyJobId || '';
+    const banner = document.createElement('div');
+    banner.style.cssText = 'padding:10px 12px;background:var(--bg-3);border:1px solid var(--yellow);border-radius:6px;margin:6px 0;font-size:13px';
+    banner.innerHTML = `
+      <div style="font-weight:600;color:var(--yellow);margin-bottom:6px">
+        <i data-lucide="alert-triangle" style="width:14px;height:14px;vertical-align:-2px"></i>
+        Python not found on NAS
+      </div>
+      <div style="color:var(--text-2);margin-bottom:8px">${msg.message || ''}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-secondary btn-sm" onclick="Pipeline._subtitlePythonReply('${jobId}','sftp_all',this.closest('div[style]'))">
+          Use SFTP Hash (all)
+        </button>
+        <button class="btn btn-secondary btn-sm" onclick="Pipeline._subtitlePythonReply('${jobId}','skip_all',this.closest('div[style]'))">
+          Skip Hash (all)
+        </button>
+        <a href="https://www.synology.com/en-global/dsm_guide/package_center" target="_blank" class="btn btn-secondary btn-sm">
+          Install Python 3 from DSM Package Center
+        </a>
+      </div>`;
+    const logEl = document.getElementById(els.logEl);
+    if (logEl) { logEl.appendChild(banner); lucide.createIcons(); logEl.scrollTop = logEl.scrollHeight; }
+  },
+
+  _subtitlePythonReply(jobId, choice, banner) {
+    if (banner) banner.remove();
+    if (!jobId) return;
+    fetch(`/api/jobs/${jobId}/subtitle-python-reply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ choice }),
+    });
   },
 
   showFolderCleanup(folders) {
