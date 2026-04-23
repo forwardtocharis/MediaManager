@@ -36,7 +36,7 @@ class OMDBClient:
             reason = state["pause_reason"] if state else "unknown"
             raise RateLimitPausedError(
                 f"OMDB API is paused: {reason}. "
-                "Run: python cli.py resume-api --api omdb"
+                "Run: python cli.py resume-api --api omdb, or click the OMDB dot in the UI header."
             )
 
         if self.daily_limit > 0:
@@ -49,7 +49,7 @@ class OMDBClient:
                 raise RateLimitPausedError(
                     f"OMDB daily limit ({self.daily_limit}) reached. "
                     "Resume tomorrow or upgrade API plan. "
-                    "Run: python cli.py resume-api --api omdb"
+                    "Run: python cli.py resume-api --api omdb, or click the OMDB dot in the UI header."
                 )
 
     def _throttle(self) -> None:

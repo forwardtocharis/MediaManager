@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python test_ssh.py)",
+      "Bash(python -c ' *)",
+      "Bash(venv/Scripts/pip install *)",
+      "Bash(venv/Scripts/python -c \"import ollama; print\\(dir\\(ollama\\)\\); print\\(hasattr\\(ollama, 'tools'\\)\\)\")",
+      "Bash(venv/Scripts/python -c \"import inspect, ollama; print\\(inspect.getsource\\(ollama.web_search\\)\\)\")",
+      "Bash(venv/Scripts/python cli.py --help)",
+      "Bash(venv/Scripts/python -c \"import app\")",
+      "Bash(sqlite3 f:/MediaManager/mediamanager.db \"SELECT status, phase, COUNT\\(*\\) as n FROM media_files GROUP BY status, phase ORDER BY status, phase\")",
+      "Bash(net use *)",
+      "Bash(ping -n 1 diskstation)",
+      "Bash(python -)",
+      "Bash(python -c \"import paramiko; print\\(paramiko.__version__\\)\")",
+      "Bash(python -c \"import paramiko; help\\(paramiko.SFTPClient.stat\\)\")",
+      "Bash(python -c \"import paramiko; import inspect; src = inspect.getsource\\(paramiko.SFTPClient.stat\\); print\\(src\\)\")"
+    ]
+  }
+}

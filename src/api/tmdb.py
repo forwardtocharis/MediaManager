@@ -36,7 +36,7 @@ class TMDBClient:
             reason = state["pause_reason"] if state else "unknown"
             raise RateLimitPausedError(
                 f"TMDB API is paused: {reason}. "
-                "Run: python cli.py resume-api --api tmdb"
+                "Run: python cli.py resume-api --api tmdb, or click the TMDB dot in the UI header."
             )
 
         if self.daily_limit > 0:
@@ -48,7 +48,7 @@ class TMDBClient:
                 )
                 raise RateLimitPausedError(
                     f"TMDB daily limit ({self.daily_limit}) reached. "
-                    "Run: python cli.py resume-api --api tmdb (tomorrow)"
+                    "Run: python cli.py resume-api --api tmdb (tomorrow), or click the TMDB dot in the UI header."
                 )
 
     def _throttle(self) -> None:
@@ -82,7 +82,7 @@ class TMDBClient:
             )
             raise RateLimitPausedError(
                 f"TMDB returned 429. Paused for {retry_after}s. "
-                "Run: python cli.py resume-api --api tmdb"
+                "Run: python cli.py resume-api --api tmdb, or click the TMDB dot in the UI header."
             )
 
         if resp.status_code != 200:
