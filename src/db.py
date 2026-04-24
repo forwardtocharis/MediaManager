@@ -427,10 +427,23 @@ def init_rate_limit(api: str) -> None:
 
 
 def get_rate_limit(api: str) -> Optional[sqlite3.Row]:
+    """Fetch rate limit state, resetting if a new day has started."""
+    today = datetime.date.today().isoformat()
     with connect() as conn:
-        return conn.execute(
+        row = conn.execute(
             "SELECT * FROM rate_limit_state WHERE api=?", (api,)
         ).fetchone()
+        if row and row["reset_date"] != today:
+            conn.execute(
+                "UPDATE rate_limit_state SET requests_today=0, reset_date=?, paused=0, pause_reason=NULL "
+                "WHERE api=?",
+                (today, api)
+            )
+            row = conn.execute(
+                "SELECT * FROM rate_limit_state WHERE api=?", (api,)
+            ).fetchone()
+        return row
+
 
 
 def increment_request_count(api: str) -> int:
