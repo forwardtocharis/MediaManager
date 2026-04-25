@@ -1,6 +1,5 @@
 import unittest
 import sys
-import os
 
 def run():
     print("\n" + "="*60)
