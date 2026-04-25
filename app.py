@@ -178,11 +178,7 @@ def api_status():
     from src import db
     status_counts = db.count_by_status()
     phase_counts = db.count_by_phase()
-    api_state = {}
-    for api_name in ("tmdb", "omdb"):
-        row = db.get_rate_limit(api_name)
-        if row:
-            api_state[api_name] = dict(row)
+    api_state = {api: dict(row) for api, row in db.get_rate_limits(["tmdb", "omdb"]).items()}
     return jsonify({
         "status_counts": status_counts,
         "phase_counts": {str(k): v for k, v in phase_counts.items()},

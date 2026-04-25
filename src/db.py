@@ -478,6 +478,34 @@ def get_rate_limit(api: str) -> Optional[sqlite3.Row]:
         return row
 
 
+def get_rate_limits(apis: list[str]) -> dict[str, sqlite3.Row]:
+    """Fetch multiple rate limit states, resetting any that need it."""
+    if not apis:
+        return {}
+    today = datetime.date.today().isoformat()
+    placeholders = ",".join("?" * len(apis))
+    with connect() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM rate_limit_state WHERE api IN ({placeholders})",
+            apis
+        ).fetchall()
+
+        needs_reset = [r["api"] for r in rows if r["reset_date"] != today]
+        if needs_reset:
+            reset_placeholders = ",".join("?" * len(needs_reset))
+            conn.execute(
+                f"UPDATE rate_limit_state SET requests_today=0, reset_date=?, paused=0, pause_reason=NULL "
+                f"WHERE api IN ({reset_placeholders})",
+                [today] + needs_reset
+            )
+            # Re-fetch all requested APIs to get updated state
+            rows = conn.execute(
+                f"SELECT * FROM rate_limit_state WHERE api IN ({placeholders})",
+                apis
+            ).fetchall()
+
+        return {r["api"]: r for r in rows}
+
 
 def increment_request_count(api: str) -> int:
     """Increment counter, reset if new day. Returns new count."""
