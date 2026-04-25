@@ -139,6 +139,35 @@ CREATE TABLE IF NOT EXISTS duplicates (
 );
 """
 
+COLUMN_WHITELISTS = {
+    "media_files": {
+        "id", "original_path", "filename", "extension", "file_size", "parent_folder",
+        "guessed_title", "guessed_year", "guessed_type", "guessed_season", "guessed_episode", "is_extra",
+        "tmdb_id", "imdb_id", "confirmed_title", "confirmed_year", "confirmed_type",
+        "season", "episode", "episode_title", "genres", "plot", "rating", "director",
+        "cast", "air_date", "poster_url", "confidence", "phase", "status",
+        "proposed_path", "notes", "created_at", "updated_at"
+    },
+    "subtitle_files": {
+        "id", "original_path", "filename", "extension", "file_size", "language",
+        "parent_media_id", "status", "proposed_path", "created_at", "updated_at"
+    },
+    "subtitle_queue": {
+        "id", "media_id", "provider", "subtitle_id", "language", "release_name",
+        "score", "download_url", "status", "error_msg", "created_at", "updated_at"
+    }
+}
+
+
+def _validate_columns(table_name: str, columns: list[str]) -> None:
+    """Raise ValueError if any column is not in the whitelist for the given table."""
+    whitelist = COLUMN_WHITELISTS.get(table_name)
+    if not whitelist:
+        raise ValueError(f"No whitelist defined for table: {table_name}")
+    for col in columns:
+        if col not in whitelist:
+            raise ValueError(f"Invalid column '{col}' for table '{table_name}'")
+
 
 # ─── Connection management ────────────────────────────────────────────────────
 
@@ -198,6 +227,7 @@ def get_meta(key: str, default: Any = None) -> Optional[str]:
 def upsert_media_file(data: dict) -> int:
     """Insert or update a media file record. Returns the row id."""
     fields = list(data.keys())
+    _validate_columns("media_files", fields)
     placeholders = ", ".join(["?"] * len(fields))
     col_list = ", ".join(fields)
     updates = ", ".join(f"{f}=excluded.{f}" for f in fields if f != "original_path")
@@ -240,6 +270,7 @@ def get_subtitle_by_path(path: str) -> Optional[sqlite3.Row]:
 def update_media_file(media_id: int, **kwargs) -> None:
     if not kwargs:
         return
+    _validate_columns("media_files", list(kwargs.keys()))
     sets = ", ".join(f"{k}=?" for k in kwargs)
     values = list(kwargs.values()) + [media_id]
     with connect() as conn:
@@ -335,6 +366,7 @@ def count_by_phase() -> dict[int, int]:
 
 def upsert_subtitle_file(data: dict) -> int:
     fields = list(data.keys())
+    _validate_columns("subtitle_files", fields)
     placeholders = ", ".join(["?"] * len(fields))
     col_list = ", ".join(fields)
     updates = ", ".join(f"{f}=excluded.{f}" for f in fields if f != "original_path")
@@ -371,6 +403,7 @@ def get_unlinked_subtitles() -> list[sqlite3.Row]:
 def update_subtitle_file_by_id(subtitle_id: int, **kwargs) -> None:
     if not kwargs:
         return
+    _validate_columns("subtitle_files", list(kwargs.keys()))
     sets = ", ".join(f"{k}=?" for k in kwargs)
     values = list(kwargs.values()) + [subtitle_id]
     with connect() as conn:
@@ -513,6 +546,7 @@ def resolve_duplicate(dup_id: int, resolution: str) -> None:
 def insert_subtitle_queue(data: dict) -> int:
     """Insert a new subtitle queue entry. Returns the row id."""
     fields = list(data.keys())
+    _validate_columns("subtitle_queue", fields)
     placeholders = ", ".join(["?"] * len(fields))
     col_list = ", ".join(fields)
     sql = f"INSERT INTO subtitle_queue({col_list}) VALUES({placeholders})"
@@ -549,6 +583,7 @@ def get_queued_languages(media_id: int) -> set[str]:
 def update_subtitle_queue(queue_id: int, **kwargs) -> None:
     if not kwargs:
         return
+    _validate_columns("subtitle_queue", list(kwargs.keys()))
     sets = ", ".join(f"{k}=?" for k in kwargs)
     values = list(kwargs.values()) + [queue_id]
     with connect() as conn:
