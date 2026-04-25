@@ -49,16 +49,21 @@ def decade_folder(year: int) -> str:
 
 
 def build_movie_path(base_dir: str | Path, title: str, year: int,
-                     extension: str) -> Path:
+                     extension: str, use_decade_folders: bool = True) -> Path:
     """
     Build the proposed output path for a movie file.
-    Structure: <base_dir>/<decade>/<Title (Year)>/<Title (Year)>.<ext>
+    Structure: <base_dir>/[decade/]<Title (Year)>/<Title (Year)>.<ext>
     """
     base = Path(base_dir)
-    safe_title = sanitize_path_component(title)
+    # Use a slightly shorter limit for the title to leave room for " (Year)"
+    safe_title = sanitize_path_component(title, max_length=190)
     folder_name = sanitize_path_component(f"{safe_title} ({year})")
     filename = f"{folder_name}{extension}"
-    return base / decade_folder(year) / folder_name / filename
+
+    if use_decade_folders:
+        base = base / decade_folder(year)
+
+    return base / folder_name / filename
 
 
 def build_movie_extra_path(base_dir: str | Path, title: str, year: int,
