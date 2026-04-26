@@ -620,11 +620,22 @@ def api_duplicates():
     from src import db
     dups = db.get_pending_duplicates()
     result = []
+
+    # Collect all unique media_ids
+    all_media_ids = set()
+    for dup in dups:
+        media_ids = json.loads(dup["media_ids"])
+        all_media_ids.update(media_ids)
+
+    # Bulk fetch media files
+    media_files = db.get_media_files(list(all_media_ids))
+    media_files_dict = {row["id"]: row for row in media_files}
+
     for dup in dups:
         media_ids = json.loads(dup["media_ids"])
         files = []
         for mid in media_ids:
-            row = db.get_media_file(mid)
+            row = media_files_dict.get(mid)
             if row:
                 files.append({"id": row["id"], "filename": row["filename"],
                                "file_size": row["file_size"],

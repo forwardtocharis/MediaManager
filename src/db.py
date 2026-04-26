@@ -252,6 +252,15 @@ def get_media_file(media_id: int) -> Optional[sqlite3.Row]:
         return conn.execute("SELECT * FROM media_files WHERE id=?", (media_id,)).fetchone()
 
 
+def get_media_files(media_ids: list[int]) -> list[sqlite3.Row]:
+    if not media_ids:
+        return []
+    with connect() as conn:
+        placeholders = ",".join("?" for _ in media_ids)
+        query = f"SELECT * FROM media_files WHERE id IN ({placeholders})"
+        return conn.execute(query, media_ids).fetchall()
+
+
 def get_media_by_path(path: str) -> Optional[sqlite3.Row]:
     with connect() as conn:
         return conn.execute(
