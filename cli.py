@@ -470,15 +470,14 @@ def duplicates(ctx):
         table.add_column("Resolution")
         table.add_column("Original Path", max_width=50)
 
-        for mid in media_ids:
-            row = db.get_media_file(mid)
-            if row:
-                size_mb = f"{(row['file_size'] or 0) / (1024*1024):.0f} MB"
-                table.add_row(
-                    str(row["id"]), row["filename"],
-                    size_mb, row.get("resolution") or "unknown",
-                    row["original_path"]
-                )
+        rows = db.get_media_files(media_ids)
+        for row in rows:
+            size_mb = f"{(row['file_size'] or 0) / (1024*1024):.0f} MB"
+            table.add_row(
+                str(row["id"]), row["filename"],
+                size_mb, row.get("resolution") or "unknown",
+                row["original_path"]
+            )
         console.print(table)
 
         choice = click.prompt(
