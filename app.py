@@ -914,7 +914,8 @@ def job_identify():
                         identified += 1
                         # Queue subtitle search for newly-identified files
                         if sub_enabled:
-                            updated_row = _db.get_media_file(row["id"])
+                            updated_row = dict(row)
+                            updated_row.update(result)
                             if updated_row:
                                 os_hash = _compute_hash_for_identify(
                                     job_id, updated_row, ssh_session,

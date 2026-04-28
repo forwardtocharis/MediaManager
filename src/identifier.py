@@ -168,7 +168,7 @@ def _identify_one(
                 updates["air_date"] = ep.get("air_date")
 
     db.update_media_file(media_id, **updates)
-    return {"status": status, "confidence": confidence}
+    return updates
 
 
 # ─── TMDB helpers ─────────────────────────────────────────────────────────────
