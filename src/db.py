@@ -165,6 +165,8 @@ def _validate_columns(table_name: str, columns: list[str]) -> None:
     if not whitelist:
         raise ValueError(f"No whitelist defined for table: {table_name}")
     for col in columns:
+        if type(col) is not str:
+            raise ValueError(f"Column name must be a string, got {type(col).__name__}")
         if col not in whitelist:
             raise ValueError(f"Invalid column '{col}' for table '{table_name}'")
 
