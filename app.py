@@ -753,6 +753,15 @@ def api_folders_delete():
     if not isinstance(paths, list):
         return jsonify({"error": "paths must be a list"}), 400
 
+    # Ensure deletions are restricted to configured source directories
+    cfg = get_config()
+    source_cfg = cfg.get("source", {})
+    valid_src_dirs = []
+    for key in ["movies_path", "tv_path"]:
+        path_str = source_cfg.get(key, "").strip()
+        if path_str:
+            valid_src_dirs.append(Path(path_str).resolve())
+
     deleted = []
     errors = []
     for raw in paths:
@@ -760,6 +769,18 @@ def api_folders_delete():
         if not p.is_dir():
             errors.append({"path": raw, "error": "not a directory or already gone"})
             continue
+
+        # Security check: must be a sub-directory of a valid source path, not the source path itself
+        try:
+            resolved_p = p.resolve()
+            is_valid = any(resolved_p.is_relative_to(src_dir) and resolved_p != src_dir for src_dir in valid_src_dirs)
+        except Exception:
+            is_valid = False
+
+        if not is_valid:
+            errors.append({"path": raw, "error": "path is not a valid subdirectory of configured source directories"})
+            continue
+
         try:
             import shutil
             shutil.rmtree(p)
